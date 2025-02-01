@@ -63,10 +63,12 @@ STRATEGIES = {
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message"""
     await update.message.reply_text(
-        '📈 Options Trading Tracker Bot\n\n'
-        'Commands:\n'
+        '📈 *Options Trading Tracker Bot*\n\n'
+        '*Commands:*\n'
         '/add - Record new trade\n'
-        '/performance - View last 12 months performance'
+        '/performance - View last 12 months performance\n'
+        '/status - View current status',
+        parse_mode="Markdown"
         # Add other commands here
     )
 
@@ -206,6 +208,27 @@ async def get_performance(update:Update,context:ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error retrieving performance: {str(e)}")
         await update.message.reply_text("❌ Error retrieving performance. Please try again.")
 
+async def get_status(update:Update,context:ContextTypes.DEFAULT_TYPE):
+    try:
+        spreadsheet = client.open(SPREADSHEET_NAME)
+        sheet = spreadsheet.worksheet('Tracker')
+
+        # get performance
+        collateral = sheet.acell("G2").value
+        open_trades = sheet.acell("G3").value
+
+        message = (
+            f"*Current Status:*\n\n"
+            f"💵 *Collateral (USD):* ${collateral}\n"
+            f"🤝 *Open trades:* {open_trades}"
+        )
+        await update.message.reply_text(message,parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"Error retrieving status: {str(e)}")
+        await update.message.reply_text("❌ Error retrieving status. Please try again.")
+
+
 def main():
     """Start the bot"""
     application = Application.builder().token(TOKEN).build()
@@ -225,7 +248,8 @@ def main():
     application.add_handler(conv_handler)
     application.add_error_handler(lambda u, c: logger.error(c.error))
     application.add_handler(CommandHandler('performance',get_performance))
-    
+    application.add_handler(CommandHandler('status',get_status))
+
     # Start the bot
     application.run_polling()
 
