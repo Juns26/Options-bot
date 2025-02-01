@@ -28,7 +28,7 @@ creds = Credentials.from_service_account_info(
         "type": "service_account",
         "project_id": os.getenv('GOOGLE_PROJECT_ID'),
         "private_key_id": os.getenv('GOOGLE_PRIVAE_KEY_ID'),
-        "private_key": os.getenv('GOOGLE_PRIVATE_KEY').replace("\\n","\n"),
+        "private_key": os.getenv('GOOGLE_PRIVATE_KEY'),
         "client_email": os.getenv('GOOGLE_CLIENT_EMAIL'),
         "client_id": os.getenv("GOOGLE_CLIENT_ID"),
         "auth_uri": os.getenv('GOOGLE_AUTH_URI'),
