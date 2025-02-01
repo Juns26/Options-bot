@@ -20,8 +20,24 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive'          # Access to Google Drive
 ]
 
+load_dotenv()
+
 # Load credentials from the downloaded JSON file
-creds = Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
+creds = Credentials.from_service_account_info(
+    {
+        "type": "service_account",
+        "project_id": os.getenv('GOOGLE_PROJECT_ID'),
+        "private_key_id": os.getenv('GOOGLE_PRIVAE_KEY_ID'),
+        "private_key": os.getenv('GOOGLE_PRIVATE_KEY').replace("\\n","\n"),
+        "client_email": os.getenv('GOOGLE_CLIENT_EMAIL'),
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "auth_uri": os.getenv('GOOGLE_AUTH_URI'),
+        "token_uri": os.getenv('GOOGLE_TOKEN_URI'),
+        "auth_provider_x509_cert_url": os.getenv('GOOGLE_AUTH_PROVIDER_X509_CERT_URL'),
+        "client_x509_cert_url": os.getenv('GOOGLE_CLIENT_X509_CERT_URL'),
+        "universe_domain": "googleapis.com"
+    }, 
+    scopes=SCOPES)
 
 # Step 2: Authenticate and open the Google Sheet
 client = gspread.authorize(creds)
@@ -30,7 +46,6 @@ client = gspread.authorize(creds)
 SPREADSHEET_NAME = 'Options Tracker'
 
 # Telegram bot token
-load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Conversation states
@@ -75,7 +90,7 @@ async def handle_trade_details(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data['trade_details'] = parts  
 
         trade_summary = (
-            f"📊 **Trade Summary:**\n"
+            f"📊 *Trade Summary:*\n"
             f"Strategy: {parts[0]}\n"
             f"Date: {parts[1]}\n"
             f"Action: {parts[2]}\n"
@@ -86,10 +101,10 @@ async def handle_trade_details(update: Update, context: ContextTypes.DEFAULT_TYP
             f"Premium: {parts[7]}\n"
             f"Fees: {parts[8]}\n"
             f"Trade: {parts[9]}\n\n"
-            "✅ Confirm? Reply with **Yes** or **No**."
+            "✅ Confirm? Reply with *Yes* or *No*."
         )
 
-        await update.message.reply_text(trade_summary)
+        await update.message.reply_text(trade_summary,parse_mode="Markdown")
         return CONFIRM_TRADE
 
     except Exception as e:
@@ -167,7 +182,7 @@ async def confirm_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TRADE
 
     else:
-        await update.message.reply_text("❌ Invalid response. Please reply with **Yes** or **No**.")
+        await update.message.reply_text("❌ Invalid response. Please reply with *Yes* or *No*.",parse_mode="Markdown")
         return CONFIRM_TRADE
 
 async def get_performance(update:Update,context:ContextTypes.DEFAULT_TYPE):

@@ -3,3 +3,6 @@
 
 # Ignore credentials
 credentials.json
+
+options-bot-aws.pem
+
