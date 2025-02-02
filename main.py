@@ -19,8 +19,9 @@ SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',  # Access to Google Sheets
     'https://www.googleapis.com/auth/drive'          # Access to Google Drive
 ]
-
+TELEGRAM_USER_ID = 1019543572
 load_dotenv()
+print(os.getenv("GOOGLE_PROJECT_ID"))
 
 # Load credentials from the downloaded JSON file
 creds = Credentials.from_service_account_info(
@@ -74,12 +75,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Prompt user to enter trade details"""
-    await update.message.reply_text(
-        'Enter trade details in this format:\n\n'
-        'Strategy, Date(DD/MM/YYYY), Action, Ticker, Strike, Contract, Expiration(DD/MM/YYYY), Premium, Fees, Trade\n\n'
-        'Example:\n'
-        'CSP, 14/12/2024, SELL PUT, BABA, 82.5, 1, 17/01/2025, 125, 3.31, Open'
-    )
+    user_id = update.message.from_user.id
+    if user_id == TELEGRAM_USER_ID:
+        await update.message.reply_text(
+            'Enter trade details in this format:\n\n'
+            'Strategy, Date(DD/MM/YYYY), Action, Ticker, Strike, Contract, Expiration(DD/MM/YYYY), Premium, Fees, Trade\n\n'
+            'Example:\n'
+            'CSP, 14/12/2024, SELL PUT, BABA, 82.5, 1, 17/01/2025, 125, 3.31, Open'
+        )
+    else:
+        await update.message.reply_text("🚫 You are not authorized to use this command.")
     return WAITING_FOR_TRADE
 
 async def handle_trade_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
