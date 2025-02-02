@@ -21,7 +21,6 @@ SCOPES = [
 ]
 TELEGRAM_USER_ID = 1019543572
 load_dotenv()
-print(GOOGLE_PROJECT_ID)
 
 # Load credentials from the downloaded JSON file
 creds = Credentials.from_service_account_info(
@@ -40,7 +39,7 @@ creds = Credentials.from_service_account_info(
     }, 
     scopes=SCOPES
 )
-
+print(creds)
 # Step 2: Authenticate and open the Google Sheet
 client = gspread.authorize(creds)
 
