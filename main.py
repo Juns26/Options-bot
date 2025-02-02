@@ -27,8 +27,8 @@ load_dotenv()
 creds = Credentials.from_service_account_info(
     {
         "type": "service_account",
-        "project_id": config("GOOGLE_PROJECT_ID"),
-        "private_key_id": config("GOOGLE_PRIVATE_KEY_ID"), 
+        "project_id": config("project_id"),
+        "private_key_id": config("private_key_id"), 
         "private_key": config("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),  # Fix newlines
         "client_email": config("GOOGLE_CLIENT_EMAIL"),
         "client_id": config("GOOGLE_CLIENT_ID"),
