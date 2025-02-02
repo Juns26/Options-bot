@@ -23,21 +23,19 @@ SCOPES = [
 TELEGRAM_USER_ID = 1019543572
 load_dotenv()
 
-print(config('private_key'))
-
 # Load credentials from the downloaded JSON file
 creds = Credentials.from_service_account_info(
     {
         "type": "service_account",
-        "project_id": config("project_id"),
-        "private_key_id": config("private_key_id"), 
-        "private_key": config("private_key").replace('\\n', '\n'),  # Fix newlines
-        "client_email": config("client_email"),
-        "client_id": config("client_id"),
-        "auth_uri": config('auth_uri'),
-        "token_uri": config('token_uri'),
-        "auth_provider_x509_cert_url": config('auth_provider_x509_cert_url'),
-        "client_x509_cert_url": config('client_x509_cert_url'),
+        "project_id": config("GOOGLE_PROJECT_ID"),
+        "private_key_id": config("GOOGLE_PRIVATE_KEY_ID"), 
+        "private_key": config("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),  # Fix newlines
+        "client_email": config("GOOGLE_CLIENT_EMAIL"),
+        "client_id": config('GOOGLE_CLIENT_ID'),
+        "auth_uri": config('GOOGLE_AUTH_URI'),
+        "token_uri": config('GOOGLE_TOKEN_URI'),
+        "auth_provider_x509_cert_url": config('GOOGLE_AUTH_PROVIDER_X509_CERT_URL'),
+        "client_x509_cert_url": config('GOOGLE_CLIENT_X509_CERT_URL'),
         "universe_domain": "googleapis.com"
     }, 
     scopes=SCOPES
@@ -60,7 +58,7 @@ CONFIRM_TRADE = 1
 STRATEGIES = {
     "CSP": "Cash Secured Puts",
     "CC": "Covered Calls",
-    "BPS": "Bull Put Spread"
+    "BPS": "Bull Puts Spread"
 }
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,8 +80,9 @@ async def add_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             'Enter trade details in this format:\n\n'
             'Strategy, Date(DD/MM/YYYY), Action, Ticker, Strike, Contract, Expiration(DD/MM/YYYY), Premium, Fees, Trade\n\n'
-            'Example:\n'
-            'CSP, 14/12/2024, SELL PUT, BABA, 82.5, 1, 17/01/2025, 125, 3.31, Open'
+        )
+        await update.message.reply_text(
+            'CSP,\n 14/12/2024,\n SELL PUT,\n BABA,\n 82.5,\n 1,\n 17/01/2025,\n 125,\n 3.31,\n Open'
         )
     else:
         await update.message.reply_text("🚫 You are not authorized to use this command.")
@@ -152,8 +151,9 @@ async def confirm_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'Trade': parts[9]
         }
 
-        trade_data["Collateral"] = trade_data["Strike Price"] * trade_data['Contract'] * 100 * (-1 if trade_data["Action"]=='BUY PUT' else 1)
-        trade_data["Net Profit"] = trade_data['Premium'] - trade_data["Fees"]
+        trade_data["Collateral"] = trade_data["Strike Price"] * trade_data['Contract'] * 100 * (-1 if trade_data["Action"] in ['BUY PUT',"BUY CALL"] else 1)
+        trade_data['Premium'] = trade_data['Premium'] *  (-1 if trade_data["Action"] in ['BUY PUT',"BUY CALL"] else 1)
+        trade_data["Net Profit"] = trade_data["Premium"] - trade_data["Fees"]
         trade_data["Year / Month"] = datetime.strptime(trade_data['Date'], "%d/%m/%Y").strftime("%Y %b")
 
         # Open the Google Sheet
@@ -204,7 +204,8 @@ async def get_performance(update:Update,context:ContextTypes.DEFAULT_TYPE):
         periods = sheet.get("A6:A17")
         profits = sheet.get("D6:D17")
 
-        ytd_table = "\n".join([f"*{periods[i][0]}*: ${profits[i][0]}" for i in range(min(len(periods),12))])
+        ytd_table = "\n".join([f"*{periods[i][0]}*: ${float(profits[i][0]):,.2f}" for i in range(min(len(periods), 12))])
+
         message = (
             f"📊 *Performance Summary (USD):*\n\n"
             f"📈 *Last 12 months:*\n{ytd_table}"
