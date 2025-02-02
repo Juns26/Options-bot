@@ -21,7 +21,7 @@ SCOPES = [
 ]
 TELEGRAM_USER_ID = 1019543572
 load_dotenv()
-print(os.getenv("GOOGLE_PROJECT_ID"))
+print(GOOGLE_PROJECT_ID)
 
 # Load credentials from the downloaded JSON file
 creds = Credentials.from_service_account_info(
