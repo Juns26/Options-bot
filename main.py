@@ -8,6 +8,7 @@ import pandas as pd
 from google.oauth2.service_account import Credentials
 import os, gspread, logging
 from gspread_formatting import *
+from decouple import config
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -22,22 +23,19 @@ SCOPES = [
 TELEGRAM_USER_ID = 1019543572
 load_dotenv()
 
-for key, value in os.environ.items():
-    print(f"{key}: {value}")
-
 # Load credentials from the downloaded JSON file
 creds = Credentials.from_service_account_info(
     {
         "type": "service_account",
-        "project_id": os.getenv('GOOGLE_PROJECT_ID'),
-        "private_key_id": os.getenv('GOOGLE_PRIVATE_KEY_ID'), 
-        "private_key": os.getenv('GOOGLE_PRIVATE_KEY').replace('\\n', '\n'),  # Fix newlines
-        "client_email": os.getenv('GOOGLE_CLIENT_EMAIL'),
-        "client_id": os.getenv('GOOGLE_CLIENT_ID'),
-        "auth_uri": os.getenv('GOOGLE_AUTH_URI'),
-        "token_uri": os.getenv('GOOGLE_TOKEN_URI'),
-        "auth_provider_x509_cert_url": os.getenv('GOOGLE_AUTH_PROVIDER_X509_CERT_URL'),
-        "client_x509_cert_url": os.getenv('GOOGLE_CLIENT_X509_CERT_URL'),
+        "project_id": config('GOOGLE_PROJECT_ID'),
+        "private_key_id": config('GOOGLE_PRIVATE_KEY_ID'), 
+        "private_key": config('GOOGLE_PRIVATE_KEY').replace('\\n', '\n'),  # Fix newlines
+        "client_email": config('GOOGLE_CLIENT_EMAIL'),
+        "client_id": config('GOOGLE_CLIENT_ID'),
+        "auth_uri": config('GOOGLE_AUTH_URI'),
+        "token_uri": config('GOOGLE_TOKEN_URI'),
+        "auth_provider_x509_cert_url": config('GOOGLE_AUTH_PROVIDER_X509_CERT_URL'),
+        "client_x509_cert_url": config('GOOGLE_CLIENT_X509_CERT_URL'),
         "universe_domain": "googleapis.com"
     }, 
     scopes=SCOPES

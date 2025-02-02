@@ -4,3 +4,4 @@ pandas==2.2.3
 protobuf==5.29.3
 python-dotenv==1.0.1
 python-telegram-bot==21.10
+python-decouple==3.8
