@@ -29,13 +29,13 @@ creds = Credentials.from_service_account_info(
         "type": "service_account",
         "project_id": config("project_id"),
         "private_key_id": config("private_key_id"), 
-        "private_key": config("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),  # Fix newlines
-        "client_email": config("GOOGLE_CLIENT_EMAIL"),
-        "client_id": config("GOOGLE_CLIENT_ID"),
-        "auth_uri": config('GOOGLE_AUTH_URI'),
-        "token_uri": config('GOOGLE_TOKEN_URI'),
-        "auth_provider_x509_cert_url": config('GOOGLE_AUTH_PROVIDER_X509_CERT_URL'),
-        "client_x509_cert_url": config('GOOGLE_CLIENT_X509_CERT_URL'),
+        "private_key": config("private_key").replace('\\n', '\n'),  # Fix newlines
+        "client_email": config("client_email"),
+        "client_id": config("client_id"),
+        "auth_uri": config('auth_uri'),
+        "token_uri": config('token_uri'),
+        "auth_provider_x509_cert_url": config('auth_provider_x509_cert_url'),
+        "client_x509_cert_url": config('client_x509_cert_url'),
         "universe_domain": "googleapis.com"
     }, 
     scopes=SCOPES
