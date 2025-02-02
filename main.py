@@ -23,6 +23,8 @@ SCOPES = [
 TELEGRAM_USER_ID = 1019543572
 load_dotenv()
 
+print(config('private_key'))
+
 # Load credentials from the downloaded JSON file
 creds = Credentials.from_service_account_info(
     {
