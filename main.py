@@ -22,6 +22,9 @@ SCOPES = [
 TELEGRAM_USER_ID = 1019543572
 load_dotenv()
 
+for key, value in os.environ.items():
+    print(f"{key}: {value}")
+
 # Load credentials from the downloaded JSON file
 creds = Credentials.from_service_account_info(
     {
