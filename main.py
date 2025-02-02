@@ -27,11 +27,11 @@ load_dotenv()
 creds = Credentials.from_service_account_info(
     {
         "type": "service_account",
-        "project_id": config('GOOGLE_PROJECT_ID'),
-        "private_key_id": config('GOOGLE_PRIVATE_KEY_ID'), 
-        "private_key": config('GOOGLE_PRIVATE_KEY').replace('\\n', '\n'),  # Fix newlines
-        "client_email": config('GOOGLE_CLIENT_EMAIL'),
-        "client_id": config('GOOGLE_CLIENT_ID'),
+        "project_id": config("GOOGLE_PROJECT_ID"),
+        "private_key_id": config("GOOGLE_PRIVATE_KEY_ID"), 
+        "private_key": config("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),  # Fix newlines
+        "client_email": config("GOOGLE_CLIENT_EMAIL"),
+        "client_id": config("GOOGLE_CLIENT_ID"),
         "auth_uri": config('GOOGLE_AUTH_URI'),
         "token_uri": config('GOOGLE_TOKEN_URI'),
         "auth_provider_x509_cert_url": config('GOOGLE_AUTH_PROVIDER_X509_CERT_URL'),
@@ -40,7 +40,7 @@ creds = Credentials.from_service_account_info(
     }, 
     scopes=SCOPES
 )
-print(creds)
+
 # Step 2: Authenticate and open the Google Sheet
 client = gspread.authorize(creds)
 
@@ -48,7 +48,7 @@ client = gspread.authorize(creds)
 SPREADSHEET_NAME = 'Options Tracker'
 
 # Telegram bot token
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = config("TELEGRAM_BOT_TOKEN")
 
 # Conversation states
 WAITING_FOR_TRADE = 0
