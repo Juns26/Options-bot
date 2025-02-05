@@ -66,7 +66,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         '📈 *Options Trading Tracker Bot*\n\n'
         '*Commands:*\n'
-        '/add - Record new trade\n'
+        '/add - Add new trade (Owner access)\n'
         '/performance - View last 12 months performance\n'
         '/status - View current status',
         parse_mode="Markdown"
