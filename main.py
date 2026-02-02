@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, ConversationHandler, filters, ContextTypes
 )
-import pandas as pd
 from google.oauth2.service_account import Credentials
 import os, gspread, logging
 from gspread_formatting import *
@@ -24,6 +23,10 @@ from tigeropen.common.consts import OrderStatus
 
 import pandas as pd
 import numpy as np
+
+import asyncio
+from aiohttp import web
+import os
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -844,10 +847,6 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
         caption=caption
     )
 
-def main():
-    """Start the bot"""
-    application = Application.builder().token(TOKEN).build()
-
     # Conversation handler for 
     # Refresh new trade data
     # View Month performance
@@ -855,6 +854,11 @@ def main():
     # View options collateral
     # View option stock positions
     # Set new mth target
+
+def main():
+    """Start the bot with HTTP server for Render health checks"""
+    # Create the application
+    application = Application.builder().token(TOKEN).build()
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))
@@ -878,8 +882,46 @@ def main():
     
     application.add_handler(performance_conv_handler)
 
-    # Start the bot
-    application.run_polling()
+    async def run_bot_and_server():
+        """Run both bot polling and HTTP server"""
+        # Start the bot in polling mode
+        await application.initialize()
+        await application.start()
+        
+        # Start HTTP server for health checks
+        app = web.Application()
+        
+        # Simple health check endpoint
+        async def health_check(request):
+            return web.Response(text='OK')
+        
+        app.router.add_get('/', health_check)
+        app.router.add_get('/health', health_check)
+        
+        # Get port from Render environment or use default
+        port = int(os.environ.get('PORT', 8080))
+        
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        
+        print(f"✅ Bot is running and listening on port {port}")
+        print("✅ Health checks available at / and /health")
+        
+        # Keep both running
+        await application.updater.start_polling()
+        
+        # Keep the script running forever
+        await asyncio.Event().wait()
+    
+    try:
+        asyncio.run(run_bot_and_server())
+    except KeyboardInterrupt:
+        print("\nBot stopped")
+
+if __name__ == '__main__':
+    main()
 
 if __name__ == '__main__':
     main()
