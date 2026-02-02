@@ -4,4 +4,16 @@
 # Ignore credentials
 credentials.json
 
-options-bot.pem
+venv
+
+telegram_bot.pem
+
+options_backtest.py
+
+price_simulation.ipynb
+
+TigerTradeAPI.ipynb
+
+.ipynb_checkpoints
+
+__pycache__/

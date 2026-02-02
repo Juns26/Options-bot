@@ -5,3 +5,9 @@ protobuf==5.29.3
 python-dotenv==1.0.1
 python-telegram-bot==21.10
 python-decouple==3.8
+azure.functions
+pytesseract
+Pillow
+telegram
+tigeropen
+matplotlib
