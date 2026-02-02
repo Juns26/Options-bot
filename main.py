@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 # Conversation states
 VIEW_PERFORMANCE, SET_TARGET, SELECT_MONTH, CONFIRM_TARGET, SELECT_CUSTOM_RANGE = range(5)
 
+load_dotenv()
+
 # Load tiger broker config
 def get_client_config():
     """
@@ -50,8 +52,6 @@ def get_client_config():
     client_config.license = os.getenv("client_config.license")
 
     return client_config
-
-load_dotenv()
 
 client_config = get_client_config()
 trade_client = TradeClient(client_config)
