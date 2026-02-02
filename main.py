@@ -3,30 +3,25 @@ from dotenv import load_dotenv
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, ConversationHandler, filters, ContextTypes
 )
-from datetime import datetime
 import pandas as pd
 from google.oauth2.service_account import Credentials
 import os, gspread, logging
 from gspread_formatting import *
 from decouple import config
-import azure.functions as func
-import json
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as path_effects  # Add this import
 import matplotlib
 matplotlib.use('Agg')  # Required for headless environments
 import io
 
-import re,os
+import os
 from collections import Counter
 
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.quote.quote_client import QuoteClient
 from tigeropen.trade.trade_client import TradeClient
 from tigeropen.common.consts import OrderStatus
-from dotenv import dotenv_values
 
-from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
