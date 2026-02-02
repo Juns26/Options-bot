@@ -851,15 +851,13 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
 
 async def main():
     """Start the bot with webhook for Render"""
-    # Create the application
+
     application = Application.builder().token(TOKEN).build()
 
-    # Add handlers (same as before)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("refresh", refresh_trades))
-    
-    # Performance conversation handler
+
     performance_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("performance", view_performance)],
         states={
@@ -870,58 +868,63 @@ async def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_range)
             ],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: u.message.reply_text("Cancelled.", reply_markup=ReplyKeyboardRemove()))],
+        fallbacks=[
+            CommandHandler(
+                "cancel",
+                lambda u, c: u.message.reply_text(
+                    "Cancelled.", reply_markup=ReplyKeyboardRemove()
+                )
+            )
+        ],
         allow_reentry=True
     )
-    
+
     application.add_handler(performance_conv_handler)
 
-    # Initialize the bot
     await application.initialize()
-    
-    # Get your Render URL
-    render_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://options-bot-r1c5.onrender.com')
+
+    render_url = os.environ.get(
+        "RENDER_EXTERNAL_URL",
+        "https://options-bot-r1c5.onrender.com"
+    )
     webhook_url = f"{render_url}/{TOKEN}"
-    
-    # Set webhook
-    await application.bot.set_webhook(url=webhook_url)
-    
-    # Create and run web server
+
+    # ✅ IMPORTANT: reset webhook on every deploy
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    await application.bot.set_webhook(webhook_url)
+
     app = web.Application()
-    
-    # Health check endpoint
+
     async def health_check(request):
-        return web.Response(text='OK')
-    
-    # Webhook endpoint
+        return web.Response(text="OK")
+
     async def handle_webhook(request):
-        if request.match_info.get('token') == TOKEN:
+        try:
             data = await request.json()
-            update = Update.de_json(data, application.bot)
-            await application.process_update(update)
-            return web.Response(text='OK')
-        return web.Response(status=403, text='Forbidden')
-    
-    # Set up routes
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
-    app.router.add_post(f'/{TOKEN}', handle_webhook)
-    
-    # Get port from Render environment
-    port = int(os.environ.get('PORT', 8080))
-    
-    # Start server
+        except Exception:
+            return web.Response(status=400, text="Invalid JSON")
+
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return web.Response(text="OK")
+
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+    app.router.add_post(f"/{TOKEN}", handle_webhook)
+
+    port = int(os.environ.get("PORT", 8080))
+
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    
-    print(f"✅ Bot is running with webhook on port {port}")
+
+    print(f"✅ Bot is running on port {port}")
     print(f"✅ Webhook URL: {webhook_url}")
-    print("✅ Health checks available at / and /health")
-    
-    # Keep running
+
     await asyncio.Event().wait()
-    
-if __name__ == '__main__':
+
+
+if __name__ == "__main__":
     asyncio.run(main())
+
