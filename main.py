@@ -8,20 +8,14 @@ import os, gspread, logging
 from gspread_formatting import *
 from decouple import config
 import matplotlib.pyplot as plt
-import matplotlib.patheffects as path_effects  # Add this import
 import matplotlib
 matplotlib.use('Agg')  # Required for headless environments
-import io
-
-import os
-from collections import Counter
+import io, requests, threading, time, os
 
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.quote.quote_client import QuoteClient
 from tigeropen.trade.trade_client import TradeClient
-from tigeropen.common.consts import OrderStatus
 
-import pandas as pd
 import numpy as np
 
 import asyncio
@@ -920,8 +914,19 @@ def main():
     except KeyboardInterrupt:
         print("\nBot stopped")
 
-if __name__ == '__main__':
-    main()
+#to prevent app from sleeping after 15 mins of inactivity
+def keep_render_alive():
+    """Ping the app every 10 minutes"""
+    while True:
+        try:
+            # REPLACE 'your-bot-name' with your actual Render app name
+            requests.get("https://options-bot-r1c5.onrender.com", timeout=5)
+        except:
+            pass
+        time.sleep(600)
 
 if __name__ == '__main__':
+    # Start keep-alive in background
+    threading.Thread(target=keep_render_alive, daemon=True).start()
+    
     main()
