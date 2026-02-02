@@ -41,8 +41,11 @@ def get_client_config():
     https://quant.itigerup.com/#developer Get developer information
     """
     client_config = TigerOpenClientConfig()
+    print("client_config")
     client_config.private_key = os.getenv("client_config.private_key")
+    print("get private key")
     client_config.tiger_id = os.getenv("client_config.tiger_id")
+    print("get tiger id")
     client_config.account = os.getenv("client_config.account")
     client_config.license = os.getenv("client_config.license")
 
@@ -148,7 +151,7 @@ async def refresh_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         from fetch_trades import fetch_and_update_trades
         
         # Run the fetch trades function
-        status,message = fetch_and_update_trades()
+        status,message = fetch_and_update_trades(client_config)
         
         # Send detailed status to user
         await update.message.reply_text(

@@ -11,7 +11,6 @@ try:
     from tigeropen.tiger_open_config import TigerOpenClientConfig
     from tigeropen.trade.trade_client import TradeClient
     from tigeropen.common.consts import OrderStatus
-    from dotenv import dotenv_values
     TIGER_AVAILABLE = True
 except ImportError:
     TIGER_AVAILABLE = False
@@ -47,21 +46,6 @@ def init_google_sheets():
     client = gspread.authorize(creds)
     spreadsheet = client.open('Options Tracker')
     return spreadsheet
-
-def get_client_config():
-    """Get TigerOpen client configuration"""
-    if not TIGER_AVAILABLE:
-        return None
-    
-    tigerbroker_vars = dotenv_values(".env_tiger_broker")
-    
-    client_config = TigerOpenClientConfig()
-    client_config.private_key = tigerbroker_vars.get("client_config.private_key")
-    client_config.tiger_id = tigerbroker_vars.get("client_config.tiger_id")
-    client_config.account = tigerbroker_vars.get("client_config.account")
-    client_config.license = 'TBSG'
-    
-    return client_config
 
 def fetch_orders_in_chunks(trade_client, start_date, end_date, chunk_days=30):
     """Fetch orders in chunks to handle API limits"""
@@ -220,7 +204,7 @@ def get_strategy(row):
     
     return "Other"
 
-def fetch_and_update_trades():
+def fetch_and_update_trades(client_config):
     """Main function to fetch and update trades"""
     if not TIGER_AVAILABLE:
         print("Error: TigerOpen modules not available. Cannot fetch trades.")
@@ -228,7 +212,6 @@ def fetch_and_update_trades():
     
     try:
         # Initialize clients
-        client_config = get_client_config()
         if not client_config:
             return False, "Failed to get TigerBroker configuration"
         
