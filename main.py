@@ -849,12 +849,12 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
     # View option stock positions
     # Set new mth target
 
-def main():
-    """Start the bot with HTTP server for Render health checks"""
+async def main():
+    """Start the bot with webhook for Render"""
     # Create the application
     application = Application.builder().token(TOKEN).build()
 
-    # Add handlers
+    # Add handlers (same as before)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("refresh", refresh_trades))
@@ -876,57 +876,52 @@ def main():
     
     application.add_handler(performance_conv_handler)
 
-    async def run_bot_and_server():
-        """Run both bot polling and HTTP server"""
-        # Start the bot in polling mode
-        await application.initialize()
-        await application.start()
-        
-        # Start HTTP server for health checks
-        app = web.Application()
-        
-        # Simple health check endpoint
-        async def health_check(request):
+    # Initialize the bot
+    await application.initialize()
+    
+    # Get your Render URL
+    render_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://options-bot-r1c5.onrender.com')
+    webhook_url = f"{render_url}/{TOKEN}"
+    
+    # Set webhook
+    await application.bot.set_webhook(url=webhook_url)
+    
+    # Create and run web server
+    app = web.Application()
+    
+    # Health check endpoint
+    async def health_check(request):
+        return web.Response(text='OK')
+    
+    # Webhook endpoint
+    async def handle_webhook(request):
+        if request.match_info.get('token') == TOKEN:
+            data = await request.json()
+            update = Update.de_json(data, application.bot)
+            await application.process_update(update)
             return web.Response(text='OK')
-        
-        app.router.add_get('/', health_check)
-        app.router.add_get('/health', health_check)
-        
-        # Get port from Render environment or use default
-        port = int(os.environ.get('PORT', 8080))
-        
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        
-        print(f"✅ Bot is running and listening on port {port}")
-        print("✅ Health checks available at / and /health")
-        
-        # Keep both running
-        await application.updater.start_polling()
-        
-        # Keep the script running forever
-        await asyncio.Event().wait()
+        return web.Response(status=403, text='Forbidden')
     
-    try:
-        asyncio.run(run_bot_and_server())
-    except KeyboardInterrupt:
-        print("\nBot stopped")
-
-#to prevent app from sleeping after 15 mins of inactivity
-def keep_render_alive():
-    """Ping the app every 10 minutes"""
-    while True:
-        try:
-            # REPLACE 'your-bot-name' with your actual Render app name
-            requests.get("https://options-bot-r1c5.onrender.com", timeout=5)
-        except:
-            pass
-        time.sleep(600)
-
+    # Set up routes
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    app.router.add_post(f'/{TOKEN}', handle_webhook)
+    
+    # Get port from Render environment
+    port = int(os.environ.get('PORT', 8080))
+    
+    # Start server
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    print(f"✅ Bot is running with webhook on port {port}")
+    print(f"✅ Webhook URL: {webhook_url}")
+    print("✅ Health checks available at / and /health")
+    
+    # Keep running
+    await asyncio.Event().wait()
+    
 if __name__ == '__main__':
-    # Start keep-alive in background
-    threading.Thread(target=keep_render_alive, daemon=True).start()
-    
-    main()
+    asyncio.run(main())
