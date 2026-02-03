@@ -10,7 +10,7 @@ from decouple import config
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Required for headless environments
-import io, requests, threading, time, os
+import io,os 
 
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.quote.quote_client import QuoteClient
@@ -19,7 +19,6 @@ from tigeropen.trade.trade_client import TradeClient
 import numpy as np
 
 import asyncio
-from aiohttp import web
 import os
 
 # Configure logging
@@ -38,11 +37,8 @@ def get_client_config():
     https://quant.itigerup.com/#developer Get developer information
     """
     client_config = TigerOpenClientConfig()
-    print("client_config")
     client_config.private_key = os.getenv("client_config.private_key")
-    print("get private key")
     client_config.tiger_id = os.getenv("client_config.tiger_id")
-    print("get tiger id")
     client_config.account = os.getenv("client_config.account")
     client_config.license = os.getenv("client_config.license")
 
@@ -850,10 +846,8 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
     # Set new mth target
 
 async def main():
-    """Run bot using long polling (no webhook needed)."""
     application = Application.builder().token(TOKEN).build()
 
-    # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("refresh", refresh_trades))
@@ -867,30 +861,28 @@ async def main():
             SELECT_CUSTOM_RANGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_range)
             ],
-        },        fallbacks=[
-            CommandHandler("cancel", lambda u, c: u.message.reply_text("Cancelled.", reply_markup=ReplyKeyboardRemove()))
+        },
+        fallbacks=[
+            CommandHandler(
+                "cancel",
+                lambda u, c: u.message.reply_text(
+                    "Cancelled.", reply_markup=ReplyKeyboardRemove()
+                )
+            )
         ],
-        allow_reentry=True
+        allow_reentry=True,
     )
     application.add_handler(performance_conv_handler)
-    
-    # Start polling (no webhook!)
+
+    # Start the bot
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
 
-    logger.info("✅ Bot started with long polling.")
-    print("Bot is running... Press Ctrl+C to stop.")
+    logger.info("✅ Bot started with long polling")
 
-    # Keep alive
-    try:
-        await application.updater.stop()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        await application.stop()
-        await application.shutdown()
-
+    # 🔒 KEEP THE PROCESS ALIVE
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())

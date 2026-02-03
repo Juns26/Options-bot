@@ -9,4 +9,3 @@ telegram
 tigeropen
 matplotlib
 asyncio
-aiohttp
