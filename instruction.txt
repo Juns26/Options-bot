@@ -48,21 +48,19 @@ sudo systemctl start options-bot
 # Enable auto-start on boot
 sudo systemctl enable options-bot
 
-#to restart bot service
-sudo systemctl restart options-bot
 
-# Check status
-sudo systemctl status options-bot
-
-# Live logs (like `tail -f`)
-sudo journalctl -u options-bot -f
-
-# Last 100 lines
-sudo journalctl -u options-bot -n 100 --no-pager
-
-
-
-git status
-git add .
-git commit -m "message"
-git push origin main
+#to commit changes to ubuntu server
+STEP 1:
+    git add .
+    git commit -m "message"
+    git push origin 
+STEP 2:
+    ssh -i ~/.ssh/aws-ec2-key.pem ubuntu@100.26.23.152
+    cd ~/Options-bot
+STEP 3:
+    git fetch origin
+    git pull origin main
+STEP 4:
+    sudo systemctl restart options-bot
+    sudo systemctl status options-bot
+    sudo journalctl -u options-bot -n 50 --no-pager

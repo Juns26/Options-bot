@@ -108,31 +108,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Available Commands:\n"
         "• /refresh - Refresh trade data from Tiger Broker\n"
         "• /performance - View performance metrics\n"
-        "• /collateral - View options collateral\n"
-        "• /positions - View option/stock positions\n"
+        "• /get_position - View option/stock positions\n"
         "• /set_target - Set monthly target\n"
         "• /help - Show help message\n"
     )
     
-    await update.message.reply_text(welcome_message)  # REMOVE parse_mode='Markdown'
+    await update.message.reply_text(welcome_message, parse_mode = "HTML")  # REMOVE parse_mode='Markdown'
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a help message"""
     help_text = (
-        "*Bot Commands:*\n\n"
+        "<b>Bot Commands:</b>\n\n"
         "• /start - Start the bot\n"
         "• /refresh - Refresh trade data from Tiger Broker\n"
         "• /performance - View performance metrics\n"
-        "• /collateral - View options collateral\n"
-        "• /positions - View option/stock positions\n"
+        "• /get_position - View option/stock positions\n"
         "• /set_target - Set monthly target\n"
         "• /help - Show this help message\n\n"
-        "*Performance Options:*\n"
+        "<b>Performance Options:</b>\n"
         "• Monthly performance\n"
         "• YTD performance\n"
-        "• Custom date range\n"
+        "• Year-on-Year\n"
+        "• Custom date range"
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    await update.message.reply_text(help_text, parse_mode='HTML')
 
 async def refresh_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Refresh trade data from Tiger Broker"""
@@ -161,7 +160,11 @@ async def refresh_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def view_performance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start performance conversation"""
-    keyboard = [['📅 Month-to-date', '📈 Year-to-date', '📊 Custom Range', '❌ Cancel']]
+    keyboard = [
+        ['📅 Month-to-date', '📈 Year-to-date'], 
+        ['📊 Custom Range', '📅 Year-on-Year'],
+        ['❌ Cancel']
+    ]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
     
     await update.message.reply_text(
@@ -183,6 +186,8 @@ async def handle_performance_selection(update: Update, context: ContextTypes.DEF
             await show_ytd_performance(update, spreadsheet)
         elif user_choice == '📊 Custom Range':
             return await view_custom_range(update, context)
+        elif user_choice == '📅 Year-on-Year':  # NEW OPTION
+            await show_year_on_year_performance(update, spreadsheet)
         elif user_choice == '❌ Cancel':
             await update.message.reply_text("Performance view cancelled.", reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
@@ -208,7 +213,6 @@ def parse_money(value: str) -> float:
         return 0.0
 
     return float(value)
-
 
 def delta_indicator(current: float, base: float) -> str:
     delta = current - base
@@ -562,7 +566,14 @@ async def handle_custom_range(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return ConversationHandler.END
 
-async def generate_performance_table(periods: list, profits: list, profits_with_stk: list, targets: list, months: int) -> str:
+async def generate_performance_table(
+    periods: list, 
+    profits: list, 
+    profits_with_stk: list, 
+    targets: list, 
+    period_count: int,  # Changed from 'months' to 'period_count'
+    period_type: str = "month"  # Add this parameter
+) -> str:
     """Generate a formatted markdown table of performance data"""
     
     if not periods:
@@ -606,9 +617,20 @@ async def generate_performance_table(periods: list, profits: list, profits_with_
     
     table += "```\n\n"
     
-    # Add summary section
+    # Add summary section with dynamic labels
+    if period_type == "year":
+        period_label = "Years"
+        avg_label = "Avg Annual"
+        best_label = "Best Year"
+        worst_label = "Worst Year"
+    else:
+        period_label = "Months"
+        avg_label = "Avg Monthly"
+        best_label = "Best Month"
+        worst_label = "Worst Month"
+    
     table += "📈 *Summary*\n"
-    table += f"• Total Period: {months} months\n"
+    table += f"• Total Period: {period_count} {period_label.lower()}\n"
     table += f"• Total Profit: `${total_profit:,.2f}` ({delta_indicator(total_profit, total_target)})\n"
     table += f"• Total Profit (w/STK): `${total_profit_with_stk:,.2f}` ({delta_indicator(total_profit_with_stk, total_target)})\n"
     table += f"• Total Target: `${total_target:,.2f}`\n\n"
@@ -625,34 +647,39 @@ async def generate_performance_table(periods: list, profits: list, profits_with_
     if periods:
         avg_profit = total_profit / len(periods)
         avg_profit_with_stk = total_profit_with_stk / len(periods)
-        avg_target = total_target / len(periods) if periods else 0
+        avg_target = total_target / len(periods)
         
-        table += f"• Avg Monthly Profit: `${avg_profit:,.2f}` ({delta_indicator(avg_profit, avg_target)})\n"
-        table += f"• Avg Monthly (w/STK): `${avg_profit_with_stk:,.2f}` ({delta_indicator(avg_profit_with_stk, avg_target)})\n"
-        table += f"• Avg Monthly Target: `${avg_target:,.2f}`\n"
+        table += f"• {avg_label} Profit: `${avg_profit:,.2f}` ({delta_indicator(avg_profit, avg_target)})\n"
+        table += f"• {avg_label} (w/STK): `${avg_profit_with_stk:,.2f}` ({delta_indicator(avg_profit_with_stk, avg_target)})\n"
+        table += f"• {avg_label} Target: `${avg_target:,.2f}`\n"
     
-    # Best/Worst months
+    # Best/Worst periods
     if profits:
-        best_month_idx = profits.index(max(profits))
-        worst_month_idx = profits.index(min(profits))
+        best_period_idx = profits.index(max(profits))
+        worst_period_idx = profits.index(min(profits))
         
-        best_month_period = periods[best_month_idx]
-        worst_month_period = periods[worst_month_idx]
+        best_period = periods[best_period_idx]
+        worst_period = periods[worst_period_idx]
         
-        table += f"• Best Month ({best_month_period}): `${max(profits):,.2f}`\n"
-        table += f"• Worst Month ({worst_month_period}): `${min(profits):,.2f}`\n"
+        table += f"• {best_label} ({best_period}): `${max(profits):,.2f}`\n"
+        table += f"• {worst_label} ({worst_period}): `${min(profits):,.2f}`\n"
     
     return table
 
-async def generate_mom_chart(periods: list, profits: list, profits_with_stk: list, months: int) -> io.BytesIO:
-    """Generate Month-over-Month profit trend chart with both profit and profit+STK"""
+async def generate_performance_chart(
+    periods: list, 
+    profits: list, 
+    profits_with_stk: list, 
+    chart_type: str = "Month-over-Month"
+) -> io.BytesIO:
+    """Generate performance trend chart (supports MoM, YoY, etc.)"""
     
     if not periods or not profits or not profits_with_stk:
         # Create empty chart
         fig, ax = plt.subplots(figsize=(12, 6))
         ax.text(0.5, 0.5, "No data available", 
                 ha='center', va='center', fontsize=14)
-        ax.set_title(f"{months}-Month Performance Trend", fontsize=16, fontweight='bold')
+        ax.set_title(f"{chart_type} Performance Trend", fontsize=16, fontweight='bold')
         ax.axis('off')
         
     else:
@@ -668,7 +695,7 @@ async def generate_mom_chart(periods: list, profits: list, profits_with_stk: lis
         cumulative_profit = np.cumsum(profits_rev)
         cumulative_profit_stk = np.cumsum(profits_with_stk_rev)
         
-        # Main plot: Profit bars and cumulative lines
+        # Main plot: Profit bars
         x = np.arange(len(periods_rev))
         width = 0.35  # Narrower bars for side-by-side display
         
@@ -681,37 +708,60 @@ async def generate_mom_chart(periods: list, profits: list, profits_with_stk: lis
         bars_profit_stk = ax1.bar(x2, profits_with_stk_rev, width,
                                  color='lightblue', alpha=0.7, label='Monthly Profit (w/STK)')
         
-        
         # Add cumulative profit lines (secondary axis)
         ax1_cum = ax1.twinx()
         line_cum_profit, = ax1_cum.plot(x, cumulative_profit, 
                                        color='darkgreen', marker='o', linewidth=2, 
-                                       markersize=6, linestyle = "--", label='Cumulative Profit')
+                                       markersize=6, linestyle="--", label='Cumulative Profit')
         line_cum_profit_stk, = ax1_cum.plot(x, cumulative_profit_stk, 
                                            color='darkblue', marker='s', linewidth=2, 
                                            markersize=6, linestyle='--', label='Cumulative Profit (w/STK)')
-        # Customize main plot
-        ax1.set_xlabel('Period', fontsize=12)
-        ax1.set_ylabel('Monthly Profit ($)', fontsize=8, color='black')
-        ax1.set_title(f'{months}-Month Performance Trend', fontsize=16, fontweight='bold', pad=20)
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(periods_rev, rotation=0, ha='center', fontsize=8)
-
+        
+        # ALIGN ZERO LINES: Get current limits and align them
+        # Get the range of bar values
+        bar_min = min(min(profits_rev), min(profits_with_stk_rev))
+        bar_max = max(max(profits_rev), max(profits_with_stk_rev))
+        bar_range = bar_max - bar_min
+        
+        # Get the range of cumulative values
+        cum_min = min(min(cumulative_profit), min(cumulative_profit_stk))
+        cum_max = max(max(cumulative_profit), max(cumulative_profit_stk))
+        cum_range = cum_max - cum_min
+        
+        # Find the maximum absolute value from both datasets
+        max_abs_bar = max(abs(bar_min), abs(bar_max))
+        max_abs_cum = max(abs(cum_min), abs(cum_max))
+        max_abs_overall = max(max_abs_bar, max_abs_cum)
+        
+        # Add 10% padding
+        symmetric_limit = max_abs_overall * 1.1
+        
+        # Set both axes to have the same symmetric range around zero
+        ax1.set_ylim(-symmetric_limit, symmetric_limit)
+        ax1_cum.set_ylim(-symmetric_limit, symmetric_limit)
+        
+        # Now add zero line - it will be at the same position for both axes
         ax1.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        
+        # Customize main plot
+        if chart_type == "Year-on-Year":
+            y_label = 'Annual Profit ($)'
+        else:
+            y_label = 'Monthly Profit ($)'
+            
+        ax1.set_xlabel('Period', fontsize=12)
+        ax1.set_ylabel(y_label, fontsize=12, color='black')
+        ax1.set_title(f'{chart_type} Performance Trend', fontsize=16, fontweight='bold', pad=20)
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(periods_rev, rotation=0, ha='center', fontsize=10)
+
         ax1.grid(axis='y', alpha=0.3)
 
-        # # Remove ALL borders/frame
-        # for spine in ax1.spines.values():
-        #     spine.set_visible(False)
-
-        # # Remove borders from secondary axis too
-        # for spine in ax1_cum.spines.values():
-        #     spine.set_visible(False)
-
-        # Customize cumulative axis - move label position
-        ax1_cum.set_ylabel('Cumulative Profit ($)', fontsize=12, color='black')
+        # REMOVE secondary axis label but keep ticks
         ax1_cum.yaxis.set_label_position("right")
         ax1_cum.yaxis.tick_right()
+        # Remove the label completely
+        ax1_cum.set_ylabel('')
         
         # Create legend with better positioning
         from matplotlib.patches import Patch
@@ -724,9 +774,9 @@ async def generate_mom_chart(periods: list, profits: list, profits_with_stk: lis
         
         # Move legend further to the right (1.15 instead of 1.02)
         ax1.legend(handles=legend_elements, loc='center left', 
-                   bbox_to_anchor=(1.15, 0.5), fontsize=9, frameon=False,
-                   fancybox=True, shadow=True, borderpad=1)
-
+                   bbox_to_anchor=(1.15, 0.5), fontsize=10, frameon=False,
+                   fancybox=True, shadow=True, borderpad=1,
+                   title="Legend", title_fontsize=11)
 
     # Adjust layout - leave more space on the right for legend
     plt.tight_layout(rect=[0, 0, 0.8, 1])  # Changed from 0.85 to 0.8 (more space)
@@ -799,7 +849,9 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
         return
     
     # 1. Create and send table
-    table_text = await generate_performance_table(periods, profits, profits_with_stk, targets, months)
+    table_text = await generate_performance_table(
+        periods, profits, profits_with_stk, targets, months, period_type="month"
+    )
     await update.message.reply_text(
         f"📊 *Custom Range Performance ({months} Months)*\n\n{table_text}",
         parse_mode="Markdown",
@@ -807,8 +859,8 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
     )
 
     # 2. Create and send M-o-M chart with both profit types
-    chart_buffer = await generate_mom_chart(periods, profits, profits_with_stk, months)
-    
+    chart_buffer = await generate_performance_chart(periods, profits, profits_with_stk, f"{months}-Month")
+
     caption = f"📈 {months}-Month Performance Trend\n"
     caption += f"Total Profit: ${sum(profits):,.0f}\n"
     caption += f"Total Profit (w/STK): ${sum(profits_with_stk):,.0f}"
@@ -818,13 +870,74 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
         caption=caption
     )
 
-    # Conversation handler for 
-    # Refresh new trade data
-    # View Month performance
-    # View YTD performance
-    # View options collateral
-    # View option stock positions
-    # Set new mth target
+async def show_year_on_year_performance(update: Update, spreadsheet) -> None:
+    """Show year-on-year performance for 5 years"""
+    sheet = spreadsheet.worksheet('Tiger Trade API Summary')
+    
+    # Assuming AD32:AH36 contains:
+    # AD: Year labels, AE: Profit, AF: Profit with STK, AG: Target, AH: Previous Year
+    year_data = sheet.get('AD32:AH36')
+    
+    if not year_data or len(year_data) < 5:
+        await update.message.reply_text(
+            "No year-on-year data available.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+    
+    # Parse the data - adjust columns based on your actual sheet structure
+    years = []
+    profits = []
+    profits_with_stk = []
+    targets = []
+    
+    for row in year_data:
+        if len(row) >= 3 and row[0]:  # Ensure we have year and at least profit
+            year = str(row[0]).strip()
+            profit = parse_money(row[1]) if len(row) > 1 else 0
+            profit_with_stk = parse_money(row[2]) if len(row) > 2 else profit  # Fallback to profit
+            target = parse_money(row[3]) if len(row) > 3 else 0
+            
+            years.append(year)
+            profits.append(profit)
+            profits_with_stk.append(profit_with_stk)
+            targets.append(target)
+    
+    if not years:
+        await update.message.reply_text(
+            "No year-on-year data found.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+    
+    # Generate table using your existing function (modified for years)
+    table_text = await generate_performance_table(
+        periods=years, 
+        profits=profits, 
+        profits_with_stk=profits_with_stk, 
+        targets=targets,
+        period_count=len(years),
+        period_type="year"  # Add this
+    )
+    
+    # Send performance summary
+    await update.message.reply_text(
+        f"📅 *{len(years)}-Year Performance History*\n\n{table_text}",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    
+    # Generate and send chart
+    chart_buffer = await generate_performance_chart(years, profits, profits_with_stk, "Year-on-Year")
+    
+    caption = f"📊 {len(years)}-Year Performance Trend\n"
+    caption += f"Total Profit: ${sum(profits):,.0f}\n"
+    caption += f"Total Profit (w/STK): ${sum(profits_with_stk):,.0f}"
+    
+    await update.message.reply_photo(
+        photo=chart_buffer,
+        caption=caption
+    )
 
 async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set the target value in Google Sheets cell AB15"""
@@ -877,6 +990,155 @@ async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"⚠️ Error updating target: {str(e)}"
         )
 
+async def get_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Get detailed stock and options positions"""
+    await update.message.reply_text("📊 Fetching positions data...")
+    
+    try:
+        spreadsheet = init_google_sheets()
+        sheet = spreadsheet.worksheet('Tiger Trade API Summary')
+        
+        # 1. Get Stock Positions (AL6:AP25)
+        stock_positions_data = sheet.get('AL6:AP25')
+        
+        # 2. Get Options Positions (AL29:AV61)
+        options_positions_data = sheet.get('AL29:AV61')
+        
+        # Parse stock positions
+        stock_positions = []
+        total_stock_value = 0
+        total_stock_pnl = 0
+        
+        if stock_positions_data:
+            for row in stock_positions_data:
+                if len(row) >= 5 and row[0]:  # Check if we have at least ticker
+                    ticker = str(row[0]).strip()
+                    quantity = int(float(row[1])) if len(row) > 1 and row[1] else 0
+                    avg_price = parse_money(row[2]) if len(row) > 2 and row[2] else 0
+                    current_price = parse_money(row[3]) if len(row) > 3 and row[3] else 0
+                    delta = parse_money(row[4]) if len(row) > 4 and row[4] else 0
+                    
+                    if quantity > 0:  # Only include positions with quantity
+                        position_value = quantity * current_price
+                        total_stock_value += position_value
+                        total_stock_pnl += delta
+                        
+                        stock_positions.append({
+                            'ticker': ticker,
+                            'quantity': quantity,
+                            'avg_price': avg_price,
+                            'current_price': current_price,
+                            'delta': delta,
+                            'value': position_value,
+                            'pnl_pct': (delta / (quantity * avg_price) * 100) if quantity * avg_price > 0 else 0
+                        })
+        
+        # Parse options positions
+        options_positions = []
+        total_options_collateral = 0
+        
+        if options_positions_data:
+            for row in options_positions_data:
+                if len(row) >= 11 and row[0]:  # Check if we have at least ticker
+                    ticker = str(row[0]).strip()
+                    option_type = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+                    trade_date = str(row[2]).strip() if len(row) > 2 and row[2] else ""
+                    buy_strike = parse_money(row[3]) if len(row) > 3 and row[3] else 0
+                    sell_strike = parse_money(row[4]) if len(row) > 4 and row[4] else 0
+                    expiration = str(row[5]).strip() if len(row) > 5 and row[5] else ""
+                    strategy = str(row[6]).strip() if len(row) > 6 and row[6] else ""
+                    quantity = int(float(row[7])) if len(row) > 7 and row[7] else 0
+                    collateral = parse_money(row[8]) if len(row) > 8 and row[8] else 0
+                    current_price = parse_money(row[9]) if len(row) > 9 and row[9] else 0
+                    status = str(row[10]).strip() if len(row) > 10 and row[10] else ""
+                    
+                    if quantity > 0:  # Only include positions with quantity
+                        total_options_collateral += collateral
+                        
+                        options_positions.append({
+                            'ticker': ticker,
+                            'type': option_type,
+                            'trade_date': trade_date,
+                            'buy_strike': buy_strike,
+                            'sell_strike': sell_strike,
+                            'expiration': expiration,
+                            'strategy': strategy,
+                            'quantity': quantity,
+                            'collateral': collateral,
+                            'current_price': current_price,
+                            'status': status
+                        })
+        
+        # Format and send response
+        response = "📈 *PORTFOLIO POSITIONS*\n\n"
+        
+        # Stock Positions Summary
+        response += "🏦 *STOCK POSITIONS*\n"
+        response += f"Total Positions: {len(stock_positions)}\n"
+        response += f"Total Value: ${total_stock_value:,.2f}\n"
+        response += f"Total P&L: ${total_stock_pnl:,.2f}\n\n"
+        
+        # Detailed Stock Positions
+        if stock_positions:
+            response += "*Stock Details:*\n"
+            for pos in sorted(stock_positions, key=lambda x: abs(x['delta']), reverse=True)[:10]:  # Top 10 by P&L
+                pnl_sign = "🟢" if pos['delta'] >= 0 else "🔴"
+                response += f"{pnl_sign} *{pos['ticker']}*: {pos['quantity']} shares\n"
+                response += f"  Avg: ${pos['avg_price']:.2f} | Current: ${pos['current_price']:.2f}\n"
+                response += f"  P&L: ${pos['delta']:,.2f} ({pos['pnl_pct']:+.1f}%)\n"
+                response += f"  Value: ${pos['value']:,.2f}\n\n"
+        
+        # Options Positions Summary
+        response += "📊 *OPTIONS POSITIONS*\n"
+        response += f"Total Positions: {len(options_positions)}\n"
+        response += f"Total Collateral: ${total_options_collateral:,.2f}\n\n"
+        
+        # Options Positions by Strategy
+        strategies = {}
+        for pos in options_positions:
+            strat = pos['strategy'] or "Unknown"
+            strategies[strat] = strategies.get(strat, 0) + 1
+        
+        response += "*Strategies:*\n"
+        for strat, count in strategies.items():
+            response += f"• {strat}: {count} positions\n"
+        response += "\n"
+
+        # Detailed Options Positions
+        if options_positions:
+            response += "*Options Positions:*\n"
+            for pos in options_positions:
+                status_emoji = "✅" if pos['status'] == "OTM" else "⚠️"
+                response += f"{status_emoji} *{pos['ticker']} {pos['expiration']}*\n"
+                response += f"  Strategy: {pos['strategy']} |  Qty: {pos['quantity']}\n"
+                
+                # Always start with 2 spaces for strike line
+                response += "  "
+                
+                if pos['buy_strike'] > 0:
+                    response += f"Buy Strike: ${pos['buy_strike']:.2f}"
+                    if pos['sell_strike'] > 0:
+                        response += f" | Sell Strike: ${pos['sell_strike']:.2f}"
+                elif pos['sell_strike'] > 0:
+                    response += f"Sell Strike: ${pos['sell_strike']:.2f}"
+                
+                # Always add newline after strike line
+                response += "\n"
+                
+                response += f"  Current Price: ${pos['current_price']:.2f}\n"
+                response += "\n"
+        
+        # Send the response
+        await update.message.reply_text(
+            response,
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+            
+    except Exception as e:
+        logger.error(f"Error fetching positions: {e}")
+        await update.message.reply_text(f"❌ Error fetching positions: {str(e)}")
+
 async def main():
     application = Application.builder().token(TOKEN).build()
 
@@ -884,6 +1146,7 @@ async def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("refresh", refresh_trades))
     application.add_handler(CommandHandler("set_target", set_target))
+    application.add_handler(CommandHandler("get_position", get_position))
 
     performance_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("performance", view_performance)],
