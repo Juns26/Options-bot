@@ -1,0 +1,68 @@
+#to connect to aws ubuntu server
+ssh -i ~/.ssh/aws-ec2-key.pem ubuntu@100.26.23.152
+
+#go to project folder
+cd ~/Options-bot
+
+#to fetch all the changes, before pulling
+git fetch origin
+git pull origin main
+
+#create .env file >> paste the keys there >> Ctrl + O, Enter to save, and Ctrl+X to exit
+nano .env
+
+#Activate the virtual environment
+source venv/bin/activate
+
+#Create a systemd service file
+sudo nano /etc/systemd/system/options-bot.service
+
+---------------Paste this after creating systemd service file ---------------
+[Unit]
+Description=Options Trading Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Options-bot
+Environment="PATH=/home/ubuntu/Options-bot/venv/bin"
+ExecStart=/home/ubuntu/Options-bot/venv/bin/python /home/ubuntu/Options-bot/main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+# Optional: Auto-reload if .env changes (requires inotify-tools)
+# ExecStartPre=/bin/sleep 2
+
+[Install]
+WantedBy=multi-user.target
+---------------Paste this after creating systemd service file ---------------
+
+# Reload systemd to recognize new service
+sudo systemctl daemon-reload
+
+# Start the bot immediately
+sudo systemctl start options-bot
+
+# Enable auto-start on boot
+sudo systemctl enable options-bot
+
+#to restart bot service
+sudo systemctl restart options-bot
+
+# Check status
+sudo systemctl status options-bot
+
+# Live logs (like `tail -f`)
+sudo journalctl -u options-bot -f
+
+# Last 100 lines
+sudo journalctl -u options-bot -n 100 --no-pager
+
+
+
+git status
+git add .
+git commit -m "message"
+git push origin main

@@ -27,7 +27,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # Conversation states
-VIEW_PERFORMANCE, SET_TARGET, SELECT_MONTH, CONFIRM_TARGET, SELECT_CUSTOM_RANGE = range(5)
+VIEW_PERFORMANCE, SELECT_MONTH, CONFIRM_TARGET, SELECT_CUSTOM_RANGE = range(4)
 
 load_dotenv()
 
@@ -656,9 +656,8 @@ async def generate_mom_chart(periods: list, profits: list, profits_with_stk: lis
         ax.axis('off')
         
     else:
-        # Create figure with subplots - make it wider to accommodate everything
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), 
-                                      gridspec_kw={'height_ratios': [3, 1]})
+        # Create single plot figure without metrics subplot
+        fig, ax1 = plt.subplots(figsize=(18, 8))
         
         # Reverse data to show chronological order (oldest to newest)
         periods_rev = periods[::-1]
@@ -693,13 +692,22 @@ async def generate_mom_chart(periods: list, profits: list, profits_with_stk: lis
                                            markersize=6, linestyle='--', label='Cumulative Profit (w/STK)')
         # Customize main plot
         ax1.set_xlabel('Period', fontsize=12)
-        ax1.set_ylabel('Monthly Profit ($)', fontsize=12, color='black')
+        ax1.set_ylabel('Monthly Profit ($)', fontsize=8, color='black')
         ax1.set_title(f'{months}-Month Performance Trend', fontsize=16, fontweight='bold', pad=20)
         ax1.set_xticks(x)
-        ax1.set_xticklabels(periods_rev, rotation=45, ha='right', fontsize=10)
+        ax1.set_xticklabels(periods_rev, rotation=0, ha='center', fontsize=8)
+
         ax1.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
         ax1.grid(axis='y', alpha=0.3)
-        
+
+        # # Remove ALL borders/frame
+        # for spine in ax1.spines.values():
+        #     spine.set_visible(False)
+
+        # # Remove borders from secondary axis too
+        # for spine in ax1_cum.spines.values():
+        #     spine.set_visible(False)
+
         # Customize cumulative axis - move label position
         ax1_cum.set_ylabel('Cumulative Profit ($)', fontsize=12, color='black')
         ax1_cum.yaxis.set_label_position("right")
@@ -715,38 +723,11 @@ async def generate_mom_chart(periods: list, profits: list, profits_with_stk: lis
         ]
         
         # Move legend further to the right (1.15 instead of 1.02)
-        legend = ax1.legend(handles=legend_elements, loc='center left', 
-                            bbox_to_anchor=(1.15, 0.5), fontsize=9, frameon=True,
-                            fancybox=True, shadow=True, borderpad=1)
-        
-        # Bottom plot: Performance metrics
-        ax2.axis('off')
-        
-        # Calculate metrics for both profit types
-        total_profit = sum(profits_rev)
-        total_profit_stk = sum(profits_with_stk_rev)
-        avg_profit = np.mean(profits_rev)
-        avg_profit_stk = np.mean(profits_with_stk_rev)
-        max_profit = max(profits_rev)
-        max_profit_stk = max(profits_with_stk_rev)
-        
-        # Create metrics text
-        metrics_text = (
-            f"*Performance Metrics*:\n"
-            f"• Total Profit: ${total_profit:,.0f}\n"
-            f"• Total Profit (w/STK): ${total_profit_stk:,.0f}\n"
-            f"• Avg Monthly: ${avg_profit:,.0f}\n"
-            f"• Avg Monthly (w/STK): ${avg_profit_stk:,.0f}\n"
-            f"• Best Month: ${max_profit:,.0f}\n"
-            f"• Best Month (w/STK): ${max_profit_stk:,.0f}"
-        )
-        
-        # Add metrics to bottom plot
-        ax2.text(0.02, 0.5, metrics_text, 
-                fontsize=9, fontfamily='monospace',
-                verticalalignment='center',
-                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
-    
+        ax1.legend(handles=legend_elements, loc='center left', 
+                   bbox_to_anchor=(1.15, 0.5), fontsize=9, frameon=False,
+                   fancybox=True, shadow=True, borderpad=1)
+
+
     # Adjust layout - leave more space on the right for legend
     plt.tight_layout(rect=[0, 0, 0.8, 1])  # Changed from 0.85 to 0.8 (more space)
     
@@ -764,7 +745,7 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
     
     # Update cell AB14 with selected months
     try:
-        sheet.update('AB14', [[months]])
+        sheet.update([[months]],'AB14')
         await update.message.reply_text(f"✅ Updated Gsheet custom period to {months} months")
         
         # Wait a moment for Google Sheets to recalculate
@@ -845,12 +826,64 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
     # View option stock positions
     # Set new mth target
 
+async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the target value in Google Sheets cell AB15"""
+    try:
+        # Get the target value from command arguments
+        if not context.args:
+            await update.message.reply_text(
+                "Please provide a target value.\n\n"
+                "Usage: `/set_target <amount>`\n"
+                "Example: `/set_target 500`"
+            )
+            return
+        
+        target_value = context.args[0]
+        
+        # Validate it's a valid number
+        try:
+            # Remove any commas, dollar signs, etc.
+            cleaned_value = target_value.replace('$', '').replace(',', '').strip()
+            float_value = float(cleaned_value)
+        except ValueError:
+            await update.message.reply_text(
+                "Invalid target value. Please provide a valid number.\n\n"
+                "Example: `/set_target 500` or `/set_target 500.50`"
+            )
+            return
+        
+        # Get the spreadsheet
+        spreadsheet = init_google_sheets()
+        sheet = spreadsheet.worksheet('Tiger Trade API Summary')
+        
+        # Update cell AB15 with the target value
+        sheet.update([[float_value]], 'AB15')
+        
+        # Format the display value
+        if float_value.is_integer():
+            display_value = f"${int(float_value):,}"
+        else:
+            display_value = f"${float_value:,.2f}"
+        
+        await update.message.reply_text(
+            f"✅ Target updated to {display_value}"
+        )
+        
+        logger.info(f"Target updated in AB15: {display_value}")
+        
+    except Exception as e:
+        logger.error(f"Error setting target: {e}")
+        await update.message.reply_text(
+            f"⚠️ Error updating target: {str(e)}"
+        )
+
 async def main():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("refresh", refresh_trades))
+    application.add_handler(CommandHandler("set_target", set_target))
 
     performance_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("performance", view_performance)],

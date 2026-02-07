@@ -189,6 +189,9 @@ def get_strategy(row):
     # 1. If VERTICAL and PUTS >> BPS
     if "VERTICAL" in str(row["combo_type"]) and row["option_type"] == "PUT":
         return "BPS"
+
+    elif row["combo_type"] == "CUSTOM" and row["option_type"] == "PUT":
+        return "BPS"
     
     # 2: after first filter, the remaining PUTS >> CSP
     elif row["option_type"] == "PUT":
@@ -197,10 +200,6 @@ def get_strategy(row):
     # 3. Unable to classify CALLS >> PMCC/CC/LEAPS
     elif row["option_type"] == "CALL":
         return "PMCC/CC/LEAPS"
-    
-    # 4. Fallback
-    elif row["option_type"] == "CUSTOM" and row["option_type"] == "BPS":
-        return "BPS"
     
     return "Other"
 
