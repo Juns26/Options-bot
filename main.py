@@ -1139,7 +1139,27 @@ async def get_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error(f"Error fetching positions: {e}")
         await update.message.reply_text(f"❌ Error fetching positions: {str(e)}")
 
+from aiohttp import web
+
+async def health_check(request):
+    return web.Response(text="OK")
+
 async def main():
+
+    # Get PORT from Render environment
+    port = int(os.environ.get("PORT", 10000))
+    
+    # Create HTTP server
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    logger.info(f"✅ Health endpoint active at :{port}/health")
+
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
