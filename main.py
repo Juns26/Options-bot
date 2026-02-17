@@ -62,6 +62,9 @@ TOKEN = config("TELEGRAM_BOT_TOKEN")
 # Replace with your Google Sheet's name
 SPREADSHEET_NAME = 'Options Tracker'
 
+def is_admin(user_id: int) -> bool:
+    return user_id == TELEGRAM_USER_ID
+
 # Initialize Google Sheets connection
 def init_google_sheets():
     """Initialize Google Sheets connection"""
@@ -95,15 +98,8 @@ def init_google_sheets():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message when the command /start is issued."""
-    user = update.effective_user
-    
-    # Security check
-    if user.id != TELEGRAM_USER_ID:
-        await update.message.reply_text("Unauthorized access.")
-        return
-    
     welcome_message = (
-        f"Welcome {user.first_name}!\n\n"
+        f"Welcome!\n\n"
         "📊 Options Trading Tracker\n\n"
         "Available Commands:\n"
         "• /refresh - Refresh trade data from Tiger Broker\n"
@@ -134,6 +130,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(help_text, parse_mode='HTML')
 
 async def refresh_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ You are not authorized to refresh trades.")
+        return
+
+
     """Refresh trade data from Tiger Broker"""
     await update.message.reply_text("🔄 Refreshing trade data from Tiger Broker...")
     
@@ -150,8 +152,7 @@ async def refresh_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"✅ Trade refresh completed!\n"
             f"{message}\n\n"
             f"Use /performance to view updated metrics.\n"
-            f"Use /collateral to view updated collateral.\n"
-            f"Use /positions to view updated option/stock positions."
+            f"Use /get_positions to view updated option/stock positions."
         )
         
     except Exception as e:
@@ -518,11 +519,19 @@ async def show_ytd_performance(update: Update, spreadsheet) -> None:
 # this is to let user select range for 3,6,9,12 months
 async def view_custom_range(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start custom range conversation"""
-    keyboard = [
-        ['3 Months', '6 Months'],
-        ['9 Months', '12 Months'],
-        ['❌ Cancel']
-    ]
+    if is_admin(update.effective_user.id):
+        keyboard = [
+            ['📅 Month-to-date', '📈 Year-to-date'], 
+            ['📊 Custom Range', '📅 Year-on-Year'],
+            ['❌ Cancel']
+        ]
+    else:
+        keyboard = [
+            ['📅 Month-to-date', '📈 Year-to-date'], 
+            ['📅 Year-on-Year'],
+            ['❌ Cancel']
+        ]
+
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
     
     await update.message.reply_text(
@@ -940,6 +949,11 @@ async def show_year_on_year_performance(update: Update, spreadsheet) -> None:
     )
 
 async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ You are not authorized to set targets.")
+        return
+
     """Set the target value in Google Sheets cell AB15"""
     try:
         # Get the target value from command arguments
