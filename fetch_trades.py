@@ -16,6 +16,10 @@ except ImportError:
     TIGER_AVAILABLE = False
     print("Warning: TigerOpen modules not available. Trade fetching disabled.")
 
+from zoneinfo import ZoneInfo
+
+SGT = ZoneInfo("Asia/Singapore")
+
 # Step 1: Define the scope
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
@@ -224,13 +228,13 @@ def fetch_and_update_trades(client_config):
         
         if not last_updated_day or not last_updated_time:
             # If no last update, start from 30 days ago
-            last_update = datetime.now() - timedelta(days=30)
+            last_update = datetime.now(SGT) - timedelta(days=30)
         else:
             last_update = datetime.strptime(f'{last_updated_day} {last_updated_time}', '%Y-%m-%d %H:%M:%S')
         
         # Update last update timestamp
-        sheet.update([[datetime.now().strftime('%Y-%m-%d')]], 'B1')
-        sheet.update([[datetime.now().strftime('%H:%M:%S')]], 'C1')
+        sheet.update([[datetime.now(SGT).strftime('%Y-%m-%d')]], 'B1')
+        sheet.update([[datetime.now(SGT).strftime('%H:%M:%S')]], 'C1')
 
         # Get row to add new data
         current_data = sheet.get_all_values()
@@ -241,7 +245,7 @@ def fetch_and_update_trades(client_config):
         all_orders = fetch_orders_in_chunks(
             trade_client, 
             start_date=last_update, 
-            end_date=datetime.now(), 
+            end_date=datetime.now(SGT), 
             chunk_days=30
         )
         
