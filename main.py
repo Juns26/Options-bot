@@ -152,7 +152,7 @@ async def refresh_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"✅ Trade refresh completed!\n"
             f"{message}\n\n"
             f"Use /performance to view updated metrics.\n"
-            f"Use /get_positions to view updated option/stock positions."
+            f"Use /get_position to view updated option/stock positions."
         )
         
     except Exception as e:

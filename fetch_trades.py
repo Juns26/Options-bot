@@ -335,10 +335,12 @@ def fetch_and_update_trades(client_config):
             }
             final_df = pd.concat([final_df, pd.DataFrame([stock_dict])], ignore_index=True)
         
-        # Convert timestamp to string for Google Sheets
-        if final_df["trade_time"].dtype == 'datetime64[ns]':
-            final_df["trade_time"] = final_df["trade_time"].dt.strftime('%Y-%m-%d %H:%M:%S')
-        
+        # Force convert trade_time to string safely
+        if "trade_time" in final_df.columns:
+            final_df["trade_time"] = final_df["trade_time"].apply(
+                lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None
+            )
+
         # Update Google Sheet with new data
         if not final_df.empty:
             sheet.update(final_df.values.tolist(), f'A{last_row}')
