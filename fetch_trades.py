@@ -117,7 +117,7 @@ def safe_parse_expiry(expiry):
 def parse_tiger_order(order):
     """Parse TigerOpen Order object into clean dictionary"""
     def parse_timestamp(ts):
-        return None if ts is None else datetime.fromtimestamp(ts / 1000)
+        return None if ts is None else datetime.fromtimestamp(ts / 1000, tz=SGT)
 
     contract = getattr(order, "contract", None)
 
@@ -230,7 +230,7 @@ def fetch_and_update_trades(client_config):
             # If no last update, start from 30 days ago
             last_update = datetime.now(SGT) - timedelta(days=30)
         else:
-            last_update = datetime.strptime(f'{last_updated_day} {last_updated_time}', '%Y-%m-%d %H:%M:%S')
+            last_update = datetime.strptime(f'{last_updated_day} {last_updated_time}', '%Y-%m-%d %H:%M:%S').replace(tzinfo=SGT)
         
         # Update last update timestamp
         sheet.update([[datetime.now(SGT).strftime('%Y-%m-%d')]], 'B1')
