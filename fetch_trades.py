@@ -96,7 +96,7 @@ def fetch_orders_in_chunks(trade_client, start_date, end_date, chunk_days=30):
         except Exception as e:
             print(f" ❌ Error fetching chunk: {e}")
             current_end = chunk_start
-    
+    print(all_orders)
     return all_orders
 
 def safe_parse_expiry(expiry):
@@ -135,7 +135,6 @@ def parse_tiger_order(order):
         
         expiry_raw = getattr(contract, "expiry", None)
         expiry = safe_parse_expiry(expiry_raw)
-
     parsed = {
         "action": order.action,
         "status": order.status,
@@ -232,10 +231,6 @@ def fetch_and_update_trades(client_config):
         else:
             last_update = datetime.strptime(f'{last_updated_day} {last_updated_time}', '%Y-%m-%d %H:%M:%S').replace(tzinfo=SGT)
         
-        # Update last update timestamp
-        sheet.update([[datetime.now(SGT).strftime('%Y-%m-%d')]], 'B1')
-        sheet.update([[datetime.now(SGT).strftime('%H:%M:%S')]], 'C1')
-
         # Get row to add new data
         current_data = sheet.get_all_values()
         last_row = len(current_data) + 1
@@ -335,7 +330,7 @@ def fetch_and_update_trades(client_config):
             }
             final_df = pd.concat([final_df, pd.DataFrame([stock_dict])], ignore_index=True)
         
-        # Force convert trade_time to string safely
+        # Force convert trade_time to stetring safely
         if "trade_time" in final_df.columns:
             final_df["trade_time"] = final_df["trade_time"].apply(
                 lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None
@@ -345,6 +340,10 @@ def fetch_and_update_trades(client_config):
         if not final_df.empty:
             sheet.update(final_df.values.tolist(), f'A{last_row}')
             print(f"Added {len(final_df)} new trades to sheet")
+
+            # Update last update timestamp
+            sheet.update([[datetime.now(SGT).strftime('%Y-%m-%d')]], 'B1')
+            sheet.update([[datetime.now(SGT).strftime('%H:%M:%S')]], 'C1')
         
         return True, f"Successfully added {len(final_df)} new trades"
         
@@ -353,8 +352,25 @@ def fetch_and_update_trades(client_config):
         return False, f"Error: {str(e)}"
 
 def main():
+    
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    def get_client_config():
+        """
+        https://quant.itigerup.com/#developer Get developer information
+        """
+        client_config = TigerOpenClientConfig()
+        client_config.private_key = os.getenv("client_config.private_key")
+        client_config.tiger_id = os.getenv("client_config.tiger_id")
+        client_config.account = os.getenv("client_config.account")
+        client_config.license = os.getenv("client_config.license")
+
+        return client_config
+
+    client_config = get_client_config()
     """Entry point for standalone execution"""
-    success, message = fetch_and_update_trades()
+    success, message = fetch_and_update_trades(client_config)
     if success:
         print(f"✅ {message}")
     else:
