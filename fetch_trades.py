@@ -96,7 +96,6 @@ def fetch_orders_in_chunks(trade_client, start_date, end_date, chunk_days=30):
         except Exception as e:
             print(f" ❌ Error fetching chunk: {e}")
             current_end = chunk_start
-    print(all_orders)
     return all_orders
 
 def safe_parse_expiry(expiry):
@@ -158,7 +157,7 @@ def parse_tiger_order(order):
         "contract_raw": raw_contract,        
         "filled_cash_amount": order.filled_cash_amount,
     }
-
+    print(parsed)
     return parsed
 
 def compute_cash_flow(row):
@@ -174,17 +173,24 @@ def compute_cash_flow(row):
         return abs(row["avg_fill_price"] * row["quantity"] * 100)
 
 def calculate_collateral(row):
-    """Calculate collateral for an option trade"""
-    collateral = int(row["filled"]) * float(row["strike"]) * 100
-    if row["action"] == "SELL" and row["option_type"] == "PUT":
-        return collateral
-    elif row["action"] == "BUY" and row["option_type"] == "PUT":
-        return -collateral
-    elif row["action"] == "SELL" and row["option_type"] == "CALL":
-        return -collateral
-    elif row["action"] == "BUY" and row["option_type"] == "CALL":
-        return collateral
-    return 0
+    """Calculate collateral for an option trade - returns a single numeric value"""
+    try:
+        filled = float(row["filled"]) if pd.notnull(row["filled"]) else 0
+        strike = float(row["strike"]) if pd.notnull(row["strike"]) else 0
+        
+        collateral = filled * strike * 100
+        
+        if row["action"] == "SELL" and row["option_type"] == "PUT":
+            return collateral
+        elif row["action"] == "BUY" and row["option_type"] == "PUT":
+            return -collateral
+        elif row["action"] == "SELL" and row["option_type"] == "CALL":
+            return -collateral
+        elif row["action"] == "BUY" and row["option_type"] == "CALL":
+            return collateral
+    except (ValueError, TypeError, KeyError):
+        pass
+    return 0.0  # Return a float instead of int to avoid type issues
 
 def get_strategy(row):
     """Classify trading strategy"""
@@ -248,6 +254,10 @@ def fetch_and_update_trades(client_config):
         
         if not parsed_all:
             print("No new filled option orders since last update.")
+            
+            # Update last update timestamp
+            sheet.update([[datetime.now(SGT).strftime('%Y-%m-%d')]], 'B1')
+            sheet.update([[datetime.now(SGT).strftime('%H:%M:%S')]], 'C1')
 
             return True, "No new trades found"
         
@@ -341,9 +351,9 @@ def fetch_and_update_trades(client_config):
             sheet.update(final_df.values.tolist(), f'A{last_row}')
             print(f"Added {len(final_df)} new trades to sheet")
 
-            # Update last update timestamp
-            sheet.update([[datetime.now(SGT).strftime('%Y-%m-%d')]], 'B1')
-            sheet.update([[datetime.now(SGT).strftime('%H:%M:%S')]], 'C1')
+        # Update last update timestamp
+        sheet.update([[datetime.now(SGT).strftime('%Y-%m-%d')]], 'B1')
+        sheet.update([[datetime.now(SGT).strftime('%H:%M:%S')]], 'C1')
         
         return True, f"Successfully added {len(final_df)} new trades"
         
