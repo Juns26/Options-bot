@@ -157,7 +157,8 @@ def parse_tiger_order(order):
         "contract_raw": raw_contract,        
         "filled_cash_amount": order.filled_cash_amount,
     }
-    print(parsed)
+    for i in parsed:
+        print(i)
     return parsed
 
 def compute_cash_flow(row):
