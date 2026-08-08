@@ -157,8 +157,6 @@ def parse_tiger_order(order):
         "contract_raw": raw_contract,        
         "filled_cash_amount": order.filled_cash_amount,
     }
-    for i in parsed:
-        print(i)
     return parsed
 
 def compute_cash_flow(row):
@@ -213,6 +211,114 @@ def get_strategy(row):
     
     return "Other"
 
+def build_trades_dataframe(all_orders):
+    """Take raw TigerOpen order objects and run the full parse -> filter ->
+    breakdown -> compute transformation, returning the final clean DataFrame.
+
+    This is the shared transformation logic used by both the live
+    fetch-and-update flow and the reconciliation flow, so both stay in sync.
+    Returns an empty DataFrame if there is nothing to process.
+    """
+    parsed_all = [parse_tiger_order(o) for o in all_orders]
+
+    if not parsed_all:
+        return pd.DataFrame()
+
+    # Process orders
+    df_allorders = pd.DataFrame(parsed_all)
+    df_allorders = df_allorders.sort_values('order_time').reset_index(drop=True)
+
+    # Filter option orders
+    df_option_orders = df_allorders.loc[
+        (df_allorders["status"] == OrderStatus.FILLED)
+        & (~df_allorders["contract_raw"].str.contains("STK", case=False, na=False))
+    ].copy()
+
+    # Filter stock orders
+    df_stock_orders = df_allorders.loc[
+        (df_allorders["status"] == OrderStatus.FILLED)
+        & (df_allorders["contract_raw"].str.contains("STK/USD", case=False, na=False))
+        & (df_allorders["filled"] % 100 == 0)
+    ].copy()
+
+    # Process DataFrame
+    final_df = pd.DataFrame()
+
+    # Process option orders
+    df_option_orders["premium"] = df_option_orders.apply(compute_cash_flow, axis=1)
+    df_option_orders["fees"] = df_option_orders["commission"] + df_option_orders["gst"]
+
+    # Single option contracts
+    single_options = df_option_orders[~df_option_orders["contract_raw"].str.contains("MLEG", case=False, na=False)][
+        ["action", "filled", "trade_time", "symbol", "expiry", "option_type", "combo_type", "strike", "premium", "fees"]
+    ]
+    final_df = pd.concat([final_df, single_options], ignore_index=True)
+
+    # Multi-leg option contracts breakdown
+    multi_leg_options_raw = df_option_orders[df_option_orders["contract_raw"].str.contains("MLEG", case=False, na=False)]
+    for idx, row in multi_leg_options_raw.iterrows():
+        legs = row['contract_legs']
+        if legs is None:
+            continue
+        for leg in legs:
+            leg_dict = {
+                "action": leg.action,
+                "filled": row["filled"] * leg.ratio,
+                "trade_time": row["trade_time"],
+                "symbol": leg.symbol,
+                "expiry": safe_parse_expiry(leg.expiry),
+                "option_type": leg.put_call,
+                "combo_type": row["combo_type"],
+                "strike": leg.strike,
+                "premium": leg.avg_filled_price * leg.filled_quantity * leg.multiplier * (-1 if leg.action == "BUY" else 1),
+                "fees": row["fees"] / len(legs)
+            }
+            final_df = pd.concat([final_df, pd.DataFrame([leg_dict])], ignore_index=True)
+
+    # Calculate net profit
+    final_df["net_profit"] = final_df["premium"] - final_df["fees"]
+
+    # Calculate collateral
+    final_df["collateral"] = final_df.apply(calculate_collateral, axis=1)
+
+    # Classify strategy
+    final_df["strategy"] = final_df.apply(get_strategy, axis=1)
+
+    # Append stock orders
+    for idx, stock_row in df_stock_orders.iterrows():
+        stock_dict = {
+            "action": stock_row["action"],
+            "filled": stock_row["filled"],
+            "trade_time": stock_row["trade_time"],
+            "symbol": stock_row["symbol"],
+            "expiry": None,
+            "option_type": "STK",
+            "combo_type": None,
+            "strike": stock_row["avg_fill_price"],
+            "premium": stock_row["avg_fill_price"] * stock_row["filled"] * (-1 if stock_row["action"] == "BUY" else 1),
+            "fees": stock_row["commission"] + stock_row["gst"],
+            "net_profit": (stock_row["avg_fill_price"] * stock_row["filled"] * (-1 if stock_row["action"] == "BUY" else 1)) - (stock_row["commission"] + stock_row["gst"]),
+            "collateral": 0,
+            "strategy": "Stk"
+        }
+        final_df = pd.concat([final_df, pd.DataFrame([stock_dict])], ignore_index=True)
+
+    if not final_df.empty and "trade_time" in final_df.columns:
+        final_df = final_df.sort_values(
+            by="trade_time",
+            ascending=True,
+            na_position="last"
+        ).reset_index(drop=True)
+
+    # Force convert trade_time to string safely
+    if "trade_time" in final_df.columns:
+        final_df["trade_time"] = final_df["trade_time"].apply(
+            lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None
+        )
+
+    return final_df
+
+
 def fetch_and_update_trades(client_config):
     """Main function to fetch and update trades"""
     if not TIGER_AVAILABLE:
@@ -251,9 +357,7 @@ def fetch_and_update_trades(client_config):
             chunk_days=30
         )
         
-        parsed_all = [parse_tiger_order(o) for o in all_orders]
-        
-        if not parsed_all:
+        if not all_orders:
             print("No new filled option orders since last update.")
             
             # Update last update timestamp
@@ -261,91 +365,8 @@ def fetch_and_update_trades(client_config):
             sheet.update([[datetime.now(SGT).strftime('%H:%M:%S')]], 'C1')
 
             return True, "No new trades found"
-        
-        # Process orders
-        df_allorders = pd.DataFrame(parsed_all)
-        df_allorders = df_allorders.sort_values('order_time').reset_index(drop=True)
-        
-        # Filter option orders
-        df_option_orders = df_allorders.loc[
-            (df_allorders["status"] == OrderStatus.FILLED) 
-            & (~df_allorders["contract_raw"].str.contains("STK", case=False, na=False))
-        ].copy()
-        
-        # Filter stock orders
-        df_stock_orders = df_allorders.loc[
-            (df_allorders["status"] == OrderStatus.FILLED) 
-            & (df_allorders["contract_raw"].str.contains("STK/USD", case=False, na=False))
-            & (df_allorders["filled"] % 100 == 0)
-        ].copy()
-        
-        # Process DataFrame
-        final_df = pd.DataFrame()
-        
-        # Process option orders
-        df_option_orders["premium"] = df_option_orders.apply(compute_cash_flow, axis=1)
-        df_option_orders["fees"] = df_option_orders["commission"] + df_option_orders["gst"]
-        
-        # Single option contracts
-        single_options = df_option_orders[~df_option_orders["contract_raw"].str.contains("MLEG", case=False, na=False)][
-            ["action", "filled", "trade_time", "symbol", "expiry", "option_type", "combo_type", "strike", "premium", "fees"]
-        ]
-        final_df = pd.concat([final_df, single_options], ignore_index=True)
-        
-        # Multi-leg option contracts breakdown
-        multi_leg_options_raw = df_option_orders[df_option_orders["contract_raw"].str.contains("MLEG", case=False, na=False)]
-        for idx, row in multi_leg_options_raw.iterrows():
-            legs = row['contract_legs']
-            if legs is None:
-                continue
-            for leg in legs:
-                leg_dict = {
-                    "action": leg.action,
-                    "filled": row["filled"] * leg.ratio,
-                    "trade_time": row["trade_time"],
-                    "symbol": leg.symbol,
-                    "expiry": safe_parse_expiry(leg.expiry),
-                    "option_type": leg.put_call,
-                    "combo_type": row["combo_type"],
-                    "strike": leg.strike,
-                    "premium": leg.avg_filled_price * leg.ratio * leg.filled_quantity * leg.multiplier * (-1 if leg.action == "BUY" else 1),
-                    "fees": row["fees"] / len(legs)
-                }
-                final_df = pd.concat([final_df, pd.DataFrame([leg_dict])], ignore_index=True)
-        
-        # Calculate net profit
-        final_df["net_profit"] = final_df["premium"] - final_df["fees"]
-        
-        # Calculate collateral
-        final_df["collateral"] = final_df.apply(calculate_collateral, axis=1)
-        
-        # Classify strategy
-        final_df["strategy"] = final_df.apply(get_strategy, axis=1)
-        
-        # Append stock orders
-        for idx, stock_row in df_stock_orders.iterrows():
-            stock_dict = {
-                "action": stock_row["action"],
-                "filled": stock_row["filled"],
-                "trade_time": stock_row["trade_time"],
-                "symbol": stock_row["symbol"],
-                "expiry": None,
-                "option_type": "STK",
-                "combo_type": None,
-                "strike": stock_row["avg_fill_price"],
-                "premium": stock_row["avg_fill_price"] * stock_row["filled"] * (-1 if stock_row["action"] == "BUY" else 1),
-                "fees": stock_row["commission"] + stock_row["gst"],
-                "net_profit": (stock_row["avg_fill_price"] * stock_row["filled"] * (-1 if stock_row["action"] == "BUY" else 1)) - (stock_row["commission"] + stock_row["gst"]),
-                "collateral": 0,
-                "strategy": "Stk"
-            }
-            final_df = pd.concat([final_df, pd.DataFrame([stock_dict])], ignore_index=True)
-        
-        # Force convert trade_time to stetring safely
-        if "trade_time" in final_df.columns:
-            final_df["trade_time"] = final_df["trade_time"].apply(
-                lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None
-            )
+
+        final_df = build_trades_dataframe(all_orders)
 
         # Update Google Sheet with new data
         if not final_df.empty:
