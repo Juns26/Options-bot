@@ -267,7 +267,7 @@ def build_trades_dataframe(all_orders):
                 "trade_time": row["trade_time"],
                 "symbol": leg.symbol,
                 "expiry": safe_parse_expiry(leg.expiry),
-                "option_type": leg.put_call,
+                "option_type": "STK" if leg.put_call == None else leg.put_call,
                 "combo_type": row["combo_type"],
                 "strike": leg.strike,
                 "premium": leg.avg_filled_price * leg.filled_quantity * leg.multiplier * (-1 if leg.action == "BUY" else 1),
