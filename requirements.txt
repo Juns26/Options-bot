@@ -1,6 +1,6 @@
 gspread==6.1.4
 gspread_formatting==1.2.0
-pandas==2.2.3
+pandas>=2.2.3
 protobuf==5.29.3
 python-dotenv==1.0.1
 python-telegram-bot==21.10
@@ -10,3 +10,8 @@ tigeropen
 matplotlib
 asyncio
 aiohttp
+google-genai>=1.0.0
+google-auth>=2.0.0
+langgraph>=1.2.0
+langchain-core>=1.6.0
+langchain-google-genai>=4.3.0

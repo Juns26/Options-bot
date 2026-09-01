@@ -37,10 +37,10 @@ def get_client_config():
     https://quant.itigerup.com/#developer Get developer information
     """
     client_config = TigerOpenClientConfig()
-    client_config.private_key = os.getenv("client_config.private_key")
-    client_config.tiger_id = os.getenv("client_config.tiger_id")
-    client_config.account = os.getenv("client_config.account")
-    client_config.license = os.getenv("client_config.license")
+    client_config.private_key = os.getenv("TIGER_PRIVATE_KEY")
+    client_config.tiger_id = os.getenv("TIGER_ID")
+    client_config.account = os.getenv("TIGER_ACCOUNT")
+    client_config.license = os.getenv("TIGER_LICENSE")
 
     return client_config
 
