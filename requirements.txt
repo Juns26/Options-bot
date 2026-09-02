@@ -7,7 +7,8 @@ python-telegram-bot==21.10
 python-decouple==3.8
 telegram
 tigeropen
-matplotlib
+plotly>=5.22.0
+kaleido>=0.6.1
 asyncio
 aiohttp
 google-genai>=1.0.0

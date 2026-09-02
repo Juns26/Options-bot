@@ -33,8 +33,8 @@ from google.genai import types
 from langgraph.graph import StateGraph, START, END
 
 # Tools — thin wrappers that delegate to services/
-# Single filtered fetch tool (chains filter_by_status/symbol/date/strategy) + generic aggregation
-from tools.gsheet_tools import fetch_trades, aggregate_trades
+# Single filtered fetch tool (chains filter_by_status/symbol/date/strategy) + generic aggregation + plotly chart
+from tools.gsheet_tools import fetch_trades, aggregate_trades, plot_trades
 
 # ==============================================================================
 # Configuration
@@ -45,8 +45,8 @@ load_dotenv()
 FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-lite-latest"]
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# All registered tools in the sandbox — keep it minimal: 1 fetch + 1 aggregation
-ALL_TOOLS = [fetch_trades, aggregate_trades]
+# All registered tools in the sandbox — keep it minimal: 1 fetch + 1 aggregation + 1 plot
+ALL_TOOLS = [fetch_trades, aggregate_trades, plot_trades]
 TOOL_MAP = {t.name: t for t in ALL_TOOLS}
 
 # Regex for planner placeholders like "$step_1", "$step_1_result", "step_2.output" - any $step_N prefix
@@ -267,21 +267,32 @@ Respond strictly in JSON:
     try:
         raw_text = call_gemini_with_retry(prompt, is_json=True, temperature=0.1)
         plan = json.loads(raw_text)
-        # Guard against LLM returning a bare list (e.g., steps array) instead of dict
+        # Guard against LLM returning a bare list instead of dict
         if isinstance(plan, list):
-            # Only accept list if it looks like a valid steps array
-            if plan and isinstance(plan[0], dict) and "tool_name" in plan[0]:
+            # Case 1: LLM wrapped the plan dict in a list: [{can_fulfill, steps, ...}]
+            if len(plan) == 1 and isinstance(plan[0], dict) and "can_fulfill" in plan[0]:
+                plan = plan[0]  # unwrap to dict, fall through to dict handling below
+            # Case 2: LLM returned just the steps array: [{tool_name, ...}, ...]
+            elif plan and isinstance(plan[0], dict) and "tool_name" in plan[0]:
                 steps = plan
                 can_fulfill = True
                 reason = ""
                 plan_summary = f"{len(steps)} steps (list response)"
+                if verbose:
+                    print(f"✅ Plan Created: {plan_summary} ({len(steps)} steps)")
+                return {
+                    "can_fulfill": can_fulfill,
+                    "sandbox_reason": reason,
+                    "plan_summary": plan_summary,
+                    "steps": steps
+                }
             else:
                 raise ValueError(f"LLM returned unexpected list: {str(plan)[:500]}")
-        else:
-            can_fulfill = plan.get("can_fulfill", True)
-            reason = plan.get("reason", "")
-            plan_summary = plan.get("plan_summary", "")
-            steps = plan.get("steps", [])
+        # Now plan is dict (original or unwrapped)
+        can_fulfill = plan.get("can_fulfill", True)
+        reason = plan.get("reason", "")
+        plan_summary = plan.get("plan_summary", "")
+        steps = plan.get("steps", [])
     except Exception as e:
         can_fulfill = False
         reason = f"Planning error: {str(e)}"

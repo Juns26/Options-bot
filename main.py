@@ -7,10 +7,9 @@ from google.oauth2.service_account import Credentials
 import os, gspread, logging
 from gspread_formatting import *
 from decouple import config
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # Required for headless environments
-import io,os 
+import io, os
+import plotly.graph_objects as go
+import plotly.express as px 
 
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.quote.quote_client import QuoteClient
@@ -20,6 +19,15 @@ import numpy as np
 
 import asyncio
 import os
+
+# Agent integration (LangGraph) — optional, for natural language queries like "Profit in August 2026"
+try:
+    from agent import app as agent_app
+    AGENT_AVAILABLE = True
+except Exception as _e:
+    agent_app = None
+    AGENT_AVAILABLE = False
+    logger.warning(f"Agent not available: {_e}")
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -121,10 +129,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Welcome!\n\n"
         "📊 Options Trading Tracker\n\n"
         "Available Commands:\n"
-        "• /refresh - Refresh trade data from Tiger Broker\n"
-        "• /performance - View performance metrics\n"
-        "• /get_position - View option/stock positions\n"
-        "• /set_target - Set monthly target\n"
+        "• /analyze <question> - Ask portfolio (e.g. /analyze Profit in August 2026)\n"
+        "• /refresh - Refresh trade data (admin only)\n"
+        "• /performance - View performance metrics (admin only)\n"
+        "• /get_position - View positions (admin only)\n"
+        "• /set_target - Set monthly target (admin only)\n"
         "• /help - Show help message\n"
     )
     
@@ -135,10 +144,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_text = (
         "<b>Bot Commands:</b>\n\n"
         "• /start - Start the bot\n"
-        "• /refresh - Refresh trade data from Tiger Broker\n"
-        "• /performance - View performance metrics\n"
-        "• /get_position - View option/stock positions\n"
-        "• /set_target - Set monthly target\n"
+        "• /analyze &lt;question&gt; - Ask portfolio (open to all)\n"
+        "  e.g. /analyze Profit in August 2026 and plot pie by strategy\n"
+        "• /refresh - Refresh trade data (admin only)\n"
+        "• /performance - View performance metrics (admin only)\n"
+        "• /get_position - View positions (admin only)\n"
+        "• /set_target - Set monthly target (admin only)\n"
         "• /help - Show this help message\n\n"
         "<b>Performance Options:</b>\n"
         "• Monthly performance\n"
@@ -179,7 +190,10 @@ async def refresh_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"❌ Error refreshing trades: {str(e)}")
 
 async def view_performance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start performance conversation"""
+    """Start performance conversation — admin only"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ You are not authorized to view performance. Use /analyze for portfolio queries.")
+        return ConversationHandler.END
     keyboard = [
         ['📅 Month-to-date', '📈 Year-to-date'], 
         ['📊 Custom Range', '📅 Year-on-Year'],
@@ -244,120 +258,49 @@ def delta_indicator(current: float, base: float) -> str:
         return " ■ $0"
 
 async def generate_pie_chart(update: Update, strategy_data: dict, title: str) -> io.BytesIO:
-    """Generate and send a performance chart"""
+    """Generate performance pie chart with Plotly (clean, no matplotlib)."""
+    COLOR_SEQ = ["#636EFA", "#00CC96", "#EF553B", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
 
-    # Handle empty data case
-    if not strategy_data:
-        fig, ax = plt.subplots(figsize=(10, 8))
-
-        ax.text(
-            0.5, 0.55,
-            "No MTD performance data found",
-            ha="center",
-            va="center",
-            fontsize=20,
-            fontweight="bold",
-            transform=ax.transAxes
-        )
-
-        ax.text(
-            0.5, 0.45,
-            "Trades will appear here once recorded",
-            ha="center",
-            va="center",
-            fontsize=12,
-            color="gray",
-            transform=ax.transAxes
-        )
-
-        ax.set_title(
-            f"{title}\nNet Total: $0.00",
-            fontsize=18,
-            fontweight="bold",
-            pad=20
-        )
-
-        ax.axis("off")
-
+    # --- empty ---
+    if not strategy_data or sum(strategy_data.values()) == 0:
+        fig = go.Figure()
+        fig.add_annotation(text="No MTD performance data found<br><span style='color:gray'>Trades will appear here once recorded</span>",
+                           x=0.5, y=0.55, showarrow=False, font=dict(size=18))
+        fig.update_layout(title=dict(text=f"{title}<br><span style='font-size:12px'>Net Total: $0.00</span>", x=0.5, xanchor="center"),
+                          template="plotly_white", margin=dict(l=20, r=20, t=80, b=20))
+        fig.update_xaxes(visible=False); fig.update_yaxes(visible=False)
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+        buf.write(fig.to_image(format="png", scale=2))
         buf.seek(0)
-        plt.close()
-
         return buf
 
-    # Prepare data for pie chart when data exists
     strategies = list(strategy_data.keys())
     profits = list(strategy_data.values())
-
-    # Use absolute values for pie sizing
     total = sum(profits)
-    sizes = [abs(p) for p in profits]
-    total_abs = sum(sizes)
+    # Plotly pie uses absolute values for slice size, keep signed value in hover
+    abs_vals = [abs(p) for p in profits]
+    labels = [f"{s} ({'+' if p>=0 else '-'}${abs(p):,.2f})" for s, p in zip(strategies, profits)]
 
-    if total == 0:
-        fig, ax = plt.subplots(figsize=(10, 8))
-        ax.text(0.5, 0.5, "No data to display", 
-                horizontalalignment='center', verticalalignment='center',
-                transform=ax.transAxes, fontsize=14)
-        ax.axis('off')
-        ax.set_title(f'{title}\nTotal: $0.00', fontsize=14, fontweight='bold', pad=20)
-
-    def autopct_format(pct):
-        if total_abs == 0:
-            return ''
-        value = pct * total_abs / 100
-        return f'{pct:.1f}%'
-
-    plt.figure(figsize=(10, 8))
-
-    colors = plt.cm.Set3(np.linspace(0, 1, len(strategies)))
-    wedges, texts, autotexts = plt.pie(
-        sizes,                      # ✅ IMPORTANT
+    fig = go.Figure(data=[go.Pie(
         labels=strategies,
-        autopct=autopct_format,
-        startangle=90,
-        colors=colors,
-        textprops={'fontsize': 15}
+        values=abs_vals,
+        customdata=[[p] for p in profits],
+        hovertemplate="%{label}<br>Net: $%{customdata[0]:,.2f}<br>%{percent}<extra></extra>",
+        text=[f"{s}<br>{p:+,.2f}" for s, p in zip(strategies, profits)],
+        textinfo="label+percent",
+        marker=dict(colors=COLOR_SEQ[:len(strategies)]),
+        hole=0.35,
+    )])
+    fig.update_layout(
+        title=dict(text=f"{title}<br><span style='font-size:13px'>Net Total: ${total:,.2f}</span>", x=0.5, xanchor="center", font=dict(size=18)),
+        template="plotly_white",
+        margin=dict(l=20, r=20, t=80, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
+        height=500, width=700,
     )
-
-    # ✅ OVERWRITE AUTOTEXT TO INCLUDE SIGNED VALUE
-    for i, autotext in enumerate(autotexts):
-        sign = '-' if profits[i] < 0 else '+'
-        value = abs(profits[i])
-
-        autotext.set_text(
-            f"{autotext.get_text()}\n({sign}${value:,.2f})"
-        )
-
-        # Optional: red for losses
-        if profits[i] < 0:
-            autotext.set_color('red')
-
-    plt.title(
-        f'{title}\nNet Total: ${sum(profits):,.2f}',
-        fontsize=18,
-        fontweight='bold',
-        pad=20
-    )
-
-    plt.axis('equal')
-
-    plt.legend(
-        wedges,
-        strategies,
-        title="Strategies",
-        loc="upper left",
-        bbox_to_anchor=(1, 0, 0.5, 1)
-    )
-
-    plt.tight_layout()
-
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.write(fig.to_image(format="png", scale=2))
     buf.seek(0)
-    plt.close()
-
     return buf
 
 
@@ -700,121 +643,51 @@ async def generate_performance_chart(
     profits_with_stk: list, 
     chart_type: str = "Month-over-Month"
 ) -> io.BytesIO:
-    """Generate performance trend chart (supports MoM, YoY, etc.)"""
-    
+    """Generate performance trend chart with Plotly (bars + cumulative lines, clean)."""
     if not periods or not profits or not profits_with_stk:
-        # Create empty chart
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.text(0.5, 0.5, "No data available", 
-                ha='center', va='center', fontsize=14)
-        ax.set_title(f"{chart_type} Performance Trend", fontsize=16, fontweight='bold')
-        ax.axis('off')
-        
-    else:
-        # Create single plot figure without metrics subplot
-        fig, ax1 = plt.subplots(figsize=(18, 8))
-        
-        # Reverse data to show chronological order (oldest to newest)
-        periods_rev = periods[::-1]
-        profits_rev = profits[::-1]
-        profits_with_stk_rev = profits_with_stk[::-1]
-        
-        # Calculate cumulative profits
-        cumulative_profit = np.cumsum(profits_rev)
-        cumulative_profit_stk = np.cumsum(profits_with_stk_rev)
-        
-        # Main plot: Profit bars
-        x = np.arange(len(periods_rev))
-        width = 0.35  # Narrower bars for side-by-side display
-        
-        # Create bars for both profit types (side-by-side)
-        x1 = x - width/2
-        x2 = x + width/2
-        
-        bars_profit = ax1.bar(x1, profits_rev, width, 
-                             color='lightgreen', alpha=0.7, label='Monthly Profit')
-        bars_profit_stk = ax1.bar(x2, profits_with_stk_rev, width,
-                                 color='lightblue', alpha=0.7, label='Monthly Profit (w/STK)')
-        
-        # Add cumulative profit lines (secondary axis)
-        ax1_cum = ax1.twinx()
-        line_cum_profit, = ax1_cum.plot(x, cumulative_profit, 
-                                       color='darkgreen', marker='o', linewidth=2, 
-                                       markersize=6, linestyle="--", label='Cumulative Profit')
-        line_cum_profit_stk, = ax1_cum.plot(x, cumulative_profit_stk, 
-                                           color='darkblue', marker='s', linewidth=2, 
-                                           markersize=6, linestyle='--', label='Cumulative Profit (w/STK)')
-        
-        # ALIGN ZERO LINES: Get current limits and align them
-        # Get the range of bar values
-        bar_min = min(min(profits_rev), min(profits_with_stk_rev))
-        bar_max = max(max(profits_rev), max(profits_with_stk_rev))
-        bar_range = bar_max - bar_min
-        
-        # Get the range of cumulative values
-        cum_min = min(min(cumulative_profit), min(cumulative_profit_stk))
-        cum_max = max(max(cumulative_profit), max(cumulative_profit_stk))
-        cum_range = cum_max - cum_min
-        
-        # Find the maximum absolute value from both datasets
-        max_abs_bar = max(abs(bar_min), abs(bar_max))
-        max_abs_cum = max(abs(cum_min), abs(cum_max))
-        max_abs_overall = max(max_abs_bar, max_abs_cum)
-        
-        # Add 10% padding
-        symmetric_limit = max_abs_overall * 1.1
-        
-        # Set both axes to have the same symmetric range around zero
-        ax1.set_ylim(-symmetric_limit, symmetric_limit)
-        ax1_cum.set_ylim(-symmetric_limit, symmetric_limit)
-        
-        # Now add zero line - it will be at the same position for both axes
-        ax1.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
-        
-        # Customize main plot
-        if chart_type == "Year-on-Year":
-            y_label = 'Annual Profit ($)'
-        else:
-            y_label = 'Monthly Profit ($)'
-            
-        ax1.set_xlabel('Period', fontsize=12)
-        ax1.set_ylabel(y_label, fontsize=12, color='black')
-        ax1.set_title(f'{chart_type} Performance Trend', fontsize=16, fontweight='bold', pad=20)
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(periods_rev, rotation=0, ha='center', fontsize=10)
+        fig = go.Figure()
+        fig.add_annotation(text="No data available", x=0.5, y=0.5, showarrow=False, font=dict(size=14))
+        fig.update_layout(title=dict(text=f"{chart_type} Performance Trend", x=0.5, xanchor="center"), template="plotly_white", height=400)
+        fig.update_xaxes(visible=False); fig.update_yaxes(visible=False)
+        buf = io.BytesIO()
+        buf.write(fig.to_image(format="png", scale=2))
+        buf.seek(0)
+        return buf
 
-        ax1.grid(axis='y', alpha=0.3)
+    # Reverse to chronological (oldest -> newest)
+    periods_rev = periods[::-1]
+    profits_rev = profits[::-1]
+    profits_with_stk_rev = profits_with_stk[::-1]
+    cum = np.cumsum(profits_rev)
+    cum_stk = np.cumsum(profits_with_stk_rev)
+    y_label = 'Annual Profit ($)' if chart_type == "Year-on-Year" else 'Monthly Profit ($)'
 
-        # REMOVE secondary axis label but keep ticks
-        ax1_cum.yaxis.set_label_position("right")
-        ax1_cum.yaxis.tick_right()
-        # Remove the label completely
-        ax1_cum.set_ylabel('')
-        
-        # Create legend with better positioning
-        from matplotlib.patches import Patch
-        legend_elements = [
-            Patch(facecolor='lightgreen', alpha=0.7, label='Monthly Profit'),
-            Patch(facecolor='lightblue', alpha=0.7, label='Monthly Profit (w/STK)'),
-            line_cum_profit,
-            line_cum_profit_stk
-        ]
-        
-        # Move legend further to the right (1.15 instead of 1.02)
-        ax1.legend(handles=legend_elements, loc='center left', 
-                   bbox_to_anchor=(1.15, 0.5), fontsize=10, frameon=False,
-                   fancybox=True, shadow=True, borderpad=1,
-                   title="Legend", title_fontsize=11)
+    fig = go.Figure()
+    # Bars side-by-side
+    fig.add_trace(go.Bar(x=periods_rev, y=profits_rev, name="Monthly Profit", marker_color="#7ED957", opacity=0.8))
+    fig.add_trace(go.Bar(x=periods_rev, y=profits_with_stk_rev, name="Monthly Profit (w/STK)", marker_color="#6EC1E4", opacity=0.8))
+    # Cumulative lines on secondary y
+    fig.add_trace(go.Scatter(x=periods_rev, y=cum, name="Cumulative Profit", yaxis="y2",
+                             mode="lines+markers", line=dict(color="#1B7A3D", dash="dash", width=2), marker=dict(symbol="circle", size=6)))
+    fig.add_trace(go.Scatter(x=periods_rev, y=cum_stk, name="Cumulative (w/STK)", yaxis="y2",
+                             mode="lines+markers", line=dict(color="#1E3A8A", dash="dash", width=2), marker=dict(symbol="square", size=6)))
 
-    # Adjust layout - leave more space on the right for legend
-    plt.tight_layout(rect=[0, 0, 0.8, 1])  # Changed from 0.85 to 0.8 (more space)
-    
-    # Save to buffer
+    max_abs = max(max(abs(min(profits_rev)), abs(max(profits_rev))), max(abs(min(cum)), abs(max(cum)))) * 1.1
+    fig.update_layout(
+        title=dict(text=f"{chart_type} Performance Trend", x=0.5, xanchor="center", font=dict(size=16)),
+        xaxis=dict(title="Period", tickangle=0),
+        yaxis=dict(title=y_label, zeroline=True, zerolinecolor="black", zerolinewidth=1, range=[-max_abs, max_abs]),
+        yaxis2=dict(title="", overlaying="y", side="right", showgrid=False, zeroline=False, range=[-max_abs, max_abs]),
+        barmode="group",
+        template="plotly_white",
+        height=500, width=1100,
+        margin=dict(l=50, r=50, t=60, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+        hovermode="x unified",
+    )
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.write(fig.to_image(format="png", scale=2))
     buf.seek(0)
-    plt.close()
-    
     return buf
 
 async def show_custom_performance(update: Update, spreadsheet, months: int) -> None:
@@ -1024,7 +897,10 @@ async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
 
 async def get_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Get detailed stock and options positions"""
+    """Get detailed stock and options positions — admin only"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ You are not authorized to view positions. Use /analyze for queries.")
+        return
     await update.message.reply_text("📊 Fetching positions data...")
     
     try:
@@ -1172,6 +1048,113 @@ async def get_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error(f"Error fetching positions: {e}")
         await update.message.reply_text(f"❌ Error fetching positions: {str(e)}")
 
+async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fallback handler — forwards any natural language to the LangGraph agent (fetch/aggregate/plot)."""
+    if not AGENT_AVAILABLE or not agent_app:
+        await update.message.reply_text("🤖 Agent not configured. Set GEMINI_API_KEY in .env")
+        return
+    text = (update.message.text or "").strip()
+    if not text or text.startswith("/"):
+        return
+    # Ignore exact keyboard texts handled by ConversationHandler (they are caught there first)
+    if text in ["📅 Month-to-date", "📈 Year-to-date", "📊 Custom Range", "📅 Year-on-Year", "❌ Cancel"]:
+        return
+    await update.message.reply_text("🤖 Thinking...")
+    try:
+        initial_state = {
+            "query": text,
+            "is_relevant": True,
+            "guardrail_reason": "",
+            "can_fulfill": True,
+            "sandbox_reason": "",
+            "plan_summary": "",
+            "steps": [],
+            "execution_results": [],
+            "final_response": "",
+            "verbose": False,
+        }
+        final_state = await asyncio.to_thread(agent_app.invoke, initial_state)
+        execution_results = final_state.get("execution_results", [])
+        final_response = final_state.get("final_response", "No response.")
+        for r in execution_results:
+            res = r.get("result")
+            if isinstance(res, dict) and "figure" in res:
+                try:
+                    import plotly.graph_objects as go
+                    fig = go.Figure(res["figure"])
+                    buf = io.BytesIO()
+                    buf.write(fig.to_image(format="png", scale=2))
+                    buf.seek(0)
+                    caption = res.get("title") or "Chart"
+                    await update.message.reply_photo(photo=buf, caption=f"📊 {caption}")
+                except Exception as e:
+                    logger.warning(f"Failed to render plot image: {e}")
+                    try:
+                        html = go.Figure(res["figure"]).to_html(full_html=False)
+                        await update.message.reply_text(f"```\n{html[:3500]}\n```", parse_mode="Markdown")
+                    except Exception:
+                        pass
+        await update.message.reply_text(final_response, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Agent error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Agent error: {str(e)[:1000]}")
+
+
+async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Parked agent endpoint: /analyze <your question> — open to all users.
+
+    Example: /analyze Profit in August 2026 and plot pie by strategy
+    Restricted: other endpoints (/refresh, /performance, /get_position, /set_target) remain admin-only.
+    """
+    query = " ".join(context.args) if context.args else ""
+    if not query:
+        await update.message.reply_text(
+            "Usage: /analyze <question>\n"
+            "Examples:\n"
+            "• /analyze Profit in August 2026\n"
+            "• /analyze Profit by strategy in August 2026 and plot pie\n"
+            "• /analyze What is my YTD profit?"
+        )
+        return
+    if not AGENT_AVAILABLE or not agent_app:
+        await update.message.reply_text("🤖 Agent not configured. Set GEMINI_API_KEY in .env")
+        return
+    await update.message.reply_text("🤖 Thinking...")
+    try:
+        initial_state = {
+            "query": query,
+            "is_relevant": True,
+            "guardrail_reason": "",
+            "can_fulfill": True,
+            "sandbox_reason": "",
+            "plan_summary": "",
+            "steps": [],
+            "execution_results": [],
+            "final_response": "",
+            "verbose": False,
+        }
+        final_state = await asyncio.to_thread(agent_app.invoke, initial_state)
+        execution_results = final_state.get("execution_results", [])
+        final_response = final_state.get("final_response", "No response.")
+        for r in execution_results:
+            res = r.get("result")
+            if isinstance(res, dict) and "figure" in res:
+                try:
+                    import plotly.graph_objects as go
+                    fig = go.Figure(res["figure"])
+                    buf = io.BytesIO()
+                    buf.write(fig.to_image(format="png", scale=2))
+                    buf.seek(0)
+                    caption = res.get("title") or "Chart"
+                    await update.message.reply_photo(photo=buf, caption=f"📊 {caption}")
+                except Exception as e:
+                    logger.warning(f"Failed to render plot image: {e}")
+        await update.message.reply_text(final_response, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Agent error via /analyze: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Agent error: {str(e)[:1000]}")
+
+
 from aiohttp import web
 
 async def health_check(request):
@@ -1222,6 +1205,15 @@ async def main():
         allow_reentry=True,
     )
     application.add_handler(performance_conv_handler)
+
+    # Parked agent endpoint: /analyze <question> — open to all users
+    # Example: /analyze Profit in August 2026 and plot pie by strategy
+    application.add_handler(CommandHandler("analyze", handle_analyze))
+
+    # Fallback natural language is now disabled for non-admins.
+    # Only admin can still use free-text agent via handle_agent_message (optional).
+    # Uncomment to allow admin free-text:
+    # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_agent_message))
 
     # Start the bot
     await application.initialize()

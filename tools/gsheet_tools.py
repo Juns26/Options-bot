@@ -22,6 +22,7 @@ from services.filters_service import (
         filter_by_symbol,
         filter_by_strategy)
 from services.aggregation_service import aggregate_trades as _aggregate_trades_service
+from services.plot_service import plot_trades as _plot_trades_service
 
 @tool
 def fetch_trades(
@@ -87,3 +88,40 @@ def aggregate_trades(
     """
 
     return _aggregate_trades_service(records=records, group_by=group_by, metric=metric, agg=agg)
+
+
+@tool
+def plot_trades(
+    records: List[Dict[str, Any]],
+    chart_type: str = "bar",
+    group_by: Optional[List[str]] = None,
+    metric: str = "net_profit",
+    agg: str = "sum",
+    title: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Generates a Plotly chart from trade records.
+
+    Args:
+        records: Trade records (e.g. from fetch_trades()). Must be a list of dicts.
+        chart_type: bar | pie | line | scatter
+        group_by: Columns to group by (x-axis). None/[] = single value.
+                  Valid: symbol, strategy, status, option_type, expiry, action,
+                         trade_time:month, trade_time:year, trade_time:week, trade_time:day
+        metric: Numeric column. Valid: net_profit, premium, fees, collateral.
+        agg: Aggregation: sum, count, mean/avg, min, max, median.
+        title: Optional title. Auto-generated if None.
+
+    Returns:
+        Plotly figure dict (JSON serializable). Render via:
+            import plotly.graph_objects as go; go.Figure(fig).write_html("chart.html")
+            go.Figure(fig).write_image("chart.png")  # needs kaleido
+
+    Examples:
+        plot_trades(records, "pie", ["strategy"], "net_profit", "sum")
+        plot_trades(records, "bar", ["trade_time:month"], "net_profit", "sum")
+        plot_trades(records, "bar", ["symbol"], "net_profit", "sum", "Profit by Symbol - Aug 2026")
+    """
+    return _plot_trades_service(
+        records=records, chart_type=chart_type, group_by=group_by, metric=metric, agg=agg, title=title
+    )
