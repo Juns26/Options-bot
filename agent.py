@@ -14,6 +14,7 @@ Graph: START -> guardrail -> (conditional) -> planner -> (conditional) -> execut
 import os
 import sys
 import json
+import re
 import argparse
 import time
 from typing import Dict, Any, List, TypedDict
@@ -47,6 +48,69 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # All registered tools in the sandbox — keep it minimal: 1 fetch + 1 aggregation
 ALL_TOOLS = [fetch_trades, aggregate_trades]
 TOOL_MAP = {t.name: t for t in ALL_TOOLS}
+
+# Regex for planner placeholders like "$step_1", "$step_1_result", "step_2.output" - any $step_N prefix
+_PLACEHOLDER_RE = re.compile(r"^\$?step[_-]?(\d+)", re.IGNORECASE)
+
+
+def _resolve_arg(value: Any, execution_results: List[Dict[str, Any]]) -> Any:
+    """
+    Resolve a single argument value if it is a placeholder for a prior step.
+
+    Logic:
+    1. If value is a string like "$step_1" / "step_2" -> return execution_results[N-1]["result"]
+       This is how the LLM planner references the output of a previous tool.
+    2. Otherwise return value unchanged.
+    Returns the original value if no placeholder is detected or index is out of range.
+    """
+    if isinstance(value, str):
+        m = _PLACEHOLDER_RE.match(value.strip())
+        if m:
+            idx = int(m.group(1)) - 1  # step numbers are 1-indexed, list is 0-indexed
+            if 0 <= idx < len(execution_results):
+                return execution_results[idx].get("result")
+    return value
+
+
+def _resolve_placeholders(args: Dict[str, Any], execution_results: List[Dict[str, Any]], verbose: bool = False) -> Dict[str, Any]:
+    """
+    Resolve all placeholder arguments for a tool call.
+
+    Logic:
+    1. Iterate over each arg; try to resolve string placeholders via _resolve_arg().
+    2. Special case: LLM often emits null/None for `records` meaning "use previous fetch output".
+       If `records` is None and we have prior results, replace with the most recent list result
+       (preferring the last fetch_trades output, otherwise the immediate predecessor).
+    3. Return a new args dict with resolved values; original is not mutated.
+    This makes the executor dynamic for any tool/step count (e.g., 2-step fetch->aggregate
+    or 3-step fetch->fetch->aggregate referencing $step_1 or $step_2).
+    """
+    if not execution_results or not args:
+        return args
+    resolved = {}
+    for k, v in args.items():
+        # Try generic $step_N resolution first
+        new_v = _resolve_arg(v, execution_results)
+        if new_v is not v:  # placeholder was resolved (identity check)
+            resolved[k] = new_v
+            if verbose:
+                n = len(new_v) if isinstance(new_v, list) else 1
+                print(f"   ↳ Resolved placeholder `{k}={v}` → {n} records from referenced step")
+            continue
+        # Handle null placeholder for `records` (common LLM pattern)
+        if v is None and k == "records":
+            target = None
+            for prev in reversed(execution_results):
+                if isinstance(prev.get("result"), list):
+                    target = prev["result"]
+                    break
+            if target is not None:
+                resolved[k] = target
+                if verbose:
+                    print(f"   ↳ Resolved placeholder `{k}=null` → {len(target)} records from previous step")
+                continue
+        resolved[k] = v
+    return resolved
 
 
 def get_tools_prompt() -> str:
@@ -203,10 +267,21 @@ Respond strictly in JSON:
     try:
         raw_text = call_gemini_with_retry(prompt, is_json=True, temperature=0.1)
         plan = json.loads(raw_text)
-        can_fulfill = plan.get("can_fulfill", True)
-        reason = plan.get("reason", "")
-        plan_summary = plan.get("plan_summary", "")
-        steps = plan.get("steps", [])
+        # Guard against LLM returning a bare list (e.g., steps array) instead of dict
+        if isinstance(plan, list):
+            # Only accept list if it looks like a valid steps array
+            if plan and isinstance(plan[0], dict) and "tool_name" in plan[0]:
+                steps = plan
+                can_fulfill = True
+                reason = ""
+                plan_summary = f"{len(steps)} steps (list response)"
+            else:
+                raise ValueError(f"LLM returned unexpected list: {str(plan)[:500]}")
+        else:
+            can_fulfill = plan.get("can_fulfill", True)
+            reason = plan.get("reason", "")
+            plan_summary = plan.get("plan_summary", "")
+            steps = plan.get("steps", [])
     except Exception as e:
         can_fulfill = False
         reason = f"Planning error: {str(e)}"
@@ -239,12 +314,23 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
     for step in steps:
         step_num = step.get("step_number", 1)
         tool_name = step.get("tool_name")
-        args = step.get("arguments", {})
+        args = step.get("arguments", {}) or {}
         purpose = step.get("purpose", "")
 
+        # Resolve placeholders like "$step_1" or null -> actual prior output
+        # Keeps executor dynamic for any step count/combination (e.g., fetch->aggregate, fetch->fetch->aggregate)
+        args = _resolve_placeholders(args, execution_results, verbose=verbose)
+
         if verbose:
+            # Truncate large records for display
+            display_args = {}
+            for k, v in args.items():
+                if k == "records" and isinstance(v, list):
+                    display_args[k] = f"<{len(v)} records>"
+                else:
+                    display_args[k] = v
             print(f"\n⚙️  [Step {step_num}] Running tool `{tool_name}`: {purpose}")
-            print(f"   Args: {json.dumps(args)}")
+            print(f"   Args: {json.dumps(display_args)}")
 
         if tool_name in TOOL_MAP:
             tool_fn = TOOL_MAP[tool_name]

@@ -35,18 +35,37 @@ load_dotenv()
 def get_client_config():
     """
     https://quant.itigerup.com/#developer Get developer information
+    Supports both legacy `client_config.*` and current `TIGER_*` env names.
     """
     client_config = TigerOpenClientConfig()
-    client_config.private_key = os.getenv("client_config.private_key")
-    client_config.tiger_id = os.getenv("client_config.tiger_id")
-    client_config.account = os.getenv("client_config.account")
-    client_config.license = os.getenv("client_config.license")
-
+    # private_key: handle quoted value and escaped \n (Google style) vs raw base64 (Tiger style)
+    raw_key = (
+        os.getenv("client_config.private_key")
+        or os.getenv("TIGER_PRIVATE_KEY")
+        or ""
+    )
+    if raw_key:
+        raw_key = raw_key.strip().strip('"').strip("'").replace("\\n", "\n")
+    client_config.private_key = raw_key
+    client_config.tiger_id = os.getenv("client_config.tiger_id") or os.getenv("TIGER_ID") or ""
+    client_config.account = os.getenv("client_config.account") or os.getenv("TIGER_ACCOUNT") or ""
+    client_config.license = os.getenv("client_config.license") or os.getenv("TIGER_LICENSE") or ""
     return client_config
 
 client_config = get_client_config()
-trade_client = TradeClient(client_config)
-quote_client = QuoteClient(client_config)
+# Lazy init: don't crash at import if Tiger keys missing (e.g. running bot without refresh)
+try:
+    if client_config.private_key:
+        trade_client = TradeClient(client_config)
+        quote_client = QuoteClient(client_config)
+    else:
+        trade_client = None
+        quote_client = None
+        logger.warning("Tiger private key empty — TradeClient not initialized.")
+except Exception as e:
+    logger.warning(f"Tiger client init failed: {e}")
+    trade_client = None
+    quote_client = None
 
 # Step 1: Define the scope and load credentials
 SCOPES = [

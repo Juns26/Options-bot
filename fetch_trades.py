@@ -1,6 +1,9 @@
 # fetch_trade.py
+import math
 import os
 from datetime import datetime, timedelta
+
+import numpy as np
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -205,11 +208,59 @@ def get_strategy(row):
     elif row["option_type"] == "PUT":
         return "CSP"
     
-    # 3. Unable to classify CALLS >> PMCC/CC/LEAPS
+    # 3: Unable to classify CALLS >> PMCC/CC/LEAPS
     elif row["option_type"] == "CALL":
         return "PMCC/CC/LEAPS"
+
+    elif row["option_type"] == "STK":
+        return "Stk"
     
     return "Other"
+
+
+def sanitize_for_sheet(value):
+    """Convert non-finite, missing, or non-JSON-safe values to sheet-friendly types."""
+    if value is None:
+        return None
+
+    if isinstance(value, pd.Timestamp):
+        return value.strftime('%Y-%m-%d %H:%M:%S')
+
+    if isinstance(value, datetime):
+        return value.strftime('%Y-%m-%d %H:%M:%S')
+
+    if isinstance(value, (list, tuple)):
+        return [sanitize_for_sheet(v) for v in value]
+
+    if isinstance(value, dict):
+        return {k: sanitize_for_sheet(v) for k, v in value.items()}
+
+    if isinstance(value, pd.DataFrame):
+        return value.map(sanitize_for_sheet)
+
+    if isinstance(value, np.ndarray):
+        return [sanitize_for_sheet(v) for v in value.tolist()]
+
+    if isinstance(value, (str, bool)):
+        return value
+
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+
+    if isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        return numeric
+
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+
+    return value
+
 
 def build_trades_dataframe(all_orders):
     """Take raw TigerOpen order objects and run the full parse -> filter ->
@@ -370,7 +421,8 @@ def fetch_and_update_trades(client_config):
 
         # Update Google Sheet with new data
         if not final_df.empty:
-            sheet.update(final_df.values.tolist(), f'A{last_row}')
+            rows = sanitize_for_sheet(final_df.values.tolist())
+            sheet.update(rows, f'A{last_row}')
             print(f"Added {len(final_df)} new trades to sheet")
 
         # Update last update timestamp

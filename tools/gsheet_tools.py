@@ -16,11 +16,12 @@ from typing import List, Dict, Any, Optional
 from langchain_core.tools import tool
 
 from services.gsheet_service import get_all_trades
-from services.filter_by_status import filter_by_status
-from services.filter_by_date import filter_by_date
-from services.filter_by_symbol import filter_by_symbol
-from services.filter_by_strategy import filter_by_strategy
-from services.aggregation_service import aggregate_trades
+from services.filters_service import (
+        filter_by_status,
+        filter_by_date,
+        filter_by_symbol,
+        filter_by_strategy)
+from services.aggregation_service import aggregate_trades as _aggregate_trades_service
 
 @tool
 def fetch_trades(
@@ -85,4 +86,4 @@ def aggregate_trades(
         Grouped: [{"symbol":"AAPL", "strategy":"CSP", "value":1234.56, "metric":"net_profit", "agg":"sum", "trade_count":5}, ...]
     """
 
-    return aggregate_trades(records=records, group_by=group_by, metric=metric, agg=agg)
+    return _aggregate_trades_service(records=records, group_by=group_by, metric=metric, agg=agg)
