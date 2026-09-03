@@ -5,6 +5,8 @@ from telegram.ext import (
 )
 from google.oauth2.service_account import Credentials
 import os, gspread, logging
+import html
+import re
 from gspread_formatting import *
 from decouple import config
 import io, os
@@ -1051,6 +1053,104 @@ async def get_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error(f"Error fetching positions: {e}")
         await update.message.reply_text(f"❌ Error fetching positions: {str(e)}")
 
+# --- Telegram HTML-safe sending for LLM output (fix for "Can't parse entities") ---
+# Root cause: synthesizer used to emit GitHub Markdown (**bold**, net_profit with
+# underscores) but handlers sent it with parse_mode="Markdown" (legacy). Any
+# unbalanced *, _, `, [ breaks Telegram parsing and the whole reply is rejected
+# with "Can't parse entities: can't find end of the entity...".
+# Fix: constrain the LLM to HTML (see analyze_agent.py) AND sanitize here with
+# a plain-text fallback so one bad entity can never fail the reply again.
+TELEGRAM_MSG_LIMIT = 4000
+_ALLOWED_TELEGRAM_TAGS_RE = re.compile(
+    r'</?(?:b|i|u|s|code|pre|a)(?:\s+href="[^"]*")?\s*/?>',
+    re.IGNORECASE,
+)
+
+
+def _sanitize_telegram_html(text: str) -> str:
+    """Convert arbitrary LLM output into Telegram-safe HTML.
+
+    - Converts common Markdown leftovers (**bold**, __bold__, `code`,
+      [text](url)) to the Telegram HTML subset.
+    - Escapes stray &, <, > so they can never open a broken entity.
+    - Auto-closes unclosed <b>/<i>/... tags and drops stray closings.
+    - Truncates to TELEGRAM_MSG_LIMIT without leaving a half-open tag.
+    Only <b>, <i>, <u>, <s>, <code>, <pre>, <a href="..."> are kept.
+    """
+    if not text:
+        return ""
+    s = str(text).replace("\x00", "").replace("\r\n", "\n")
+    # Markdown links -> HTML links (must run before escaping)
+    s = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', s)
+    # **bold** / __bold__ -> <b>
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s, flags=re.DOTALL)
+    s = re.sub(r"__(.+?)__", r"<b>\1</b>", s, flags=re.DOTALL)
+    # `code` -> <code> (single-line only, avoids breaking ``` blocks)
+    s = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", s)
+    # Strip Markdown heading markers (harmless in HTML, just noise)
+    s = re.sub(r"(?m)^\s*#{1,6}\s*", "", s)
+
+    # Escape everything except the allowed tags: walk tag matches,
+    # html.escape() the text between them, keep the tags verbatim.
+    out: list[str] = []
+    last = 0
+    for m in _ALLOWED_TELEGRAM_TAGS_RE.finditer(s):
+        out.append(html.escape(s[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(html.escape(s[last:]))
+    s = "".join(out)
+
+    # Truncate safely: never leave a half-open "<... " fragment at the end.
+    if len(s) > TELEGRAM_MSG_LIMIT:
+        s = s[:TELEGRAM_MSG_LIMIT]
+        s = re.sub(r"<[^>]*$", "", s)
+
+    # Balance simple paired tags: auto-close missing, drop stray closings.
+    for tag in ("b", "i", "u", "s", "code", "pre", "a"):
+        opens = len(re.findall(rf"<{tag}(?:\s[^>]*)?>", s, flags=re.IGNORECASE))
+        closes = len(re.findall(rf"</{tag}\s*>", s, flags=re.IGNORECASE))
+        if opens > closes:
+            s += f"</{tag}>" * (opens - closes)
+        elif closes > opens:
+            for _ in range(closes - opens):
+                s = re.sub(rf"</{tag}\s*>", "", s, count=1, flags=re.IGNORECASE)
+    return s
+
+
+def _strip_html_to_plain(html_text: str) -> str:
+    """Strip allowed Telegram tags back to plain text (fallback path)."""
+    if not html_text:
+        return ""
+    plain = re.sub(
+        r"</?(?:b|i|u|s|code|pre|a)(?:\s[^>]*)?>",
+        "",
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    return html.unescape(plain)
+
+
+async def _reply_html_safe(message, text: str) -> None:
+    """Reply with Telegram HTML; on entity-parse failure retry as plain text.
+
+    Guarantees the user still gets the answer even if the LLM emits markup
+    Telegram cannot parse — the original bug surfaced as
+    "Analyze agent error: Can't parse entities...".
+    """
+    safe = _sanitize_telegram_html(text)
+    try:
+        await message.reply_text(safe, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        msg = str(e).lower()
+        if "parse entities" in msg or "can't parse" in msg or "bad request" in msg:
+            logger.warning(f"HTML parse failed, falling back to plain text: {e}")
+            plain = _strip_html_to_plain(safe)[:TELEGRAM_MSG_LIMIT]
+            await message.reply_text(plain, disable_web_page_preview=True)
+        else:
+            raise
+
+
 async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fallback handler — forwards any natural language to the LangGraph analyze_agent (fetch/aggregate/plot)."""
     if not ANALYZE_AGENT_AVAILABLE or not analyze_agent_app:
@@ -1093,11 +1193,11 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 except Exception as e:
                     logger.warning(f"Failed to render plot image: {e}")
                     try:
-                        html = go.Figure(res["figure"]).to_html(full_html=False)
-                        await update.message.reply_text(f"```\n{html[:3500]}\n```", parse_mode="Markdown")
+                        html_str = go.Figure(res["figure"]).to_html(full_html=False)
+                        await update.message.reply_text(html_str[:3500], disable_web_page_preview=True)
                     except Exception:
                         pass
-        await update.message.reply_text(final_response, parse_mode="Markdown", disable_web_page_preview=True)
+        await _reply_html_safe(update.message, final_response)
     except Exception as e:
         logger.error(f"Analyze agent error: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Analyze agent error: {str(e)[:1000]}")
@@ -1152,7 +1252,7 @@ async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     await update.message.reply_photo(photo=buf, caption=f"📊 {caption}")
                 except Exception as e:
                     logger.warning(f"Failed to render plot image: {e}")
-        await update.message.reply_text(final_response, parse_mode="Markdown", disable_web_page_preview=True)
+        await _reply_html_safe(update.message, final_response)
     except Exception as e:
         logger.error(f"Analyze agent error via /analyze: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Analyze agent error: {str(e)[:1000]}")

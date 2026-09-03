@@ -470,34 +470,39 @@ def synthesizer_node(state: AgentState) -> Dict[str, Any]:
     prompt = f"""
 You are an expert Options Portfolio Intelligence Assistant. Answer concisely and cleanly.
 
-Metric definitions: premium = gross before fees, fees = commission+GST, net_profit = premium - fees (i.e., profit less fees = net_profit, gross/premium = net_profit + fees).
+Metric definitions (internal only — always display with spaces, never with
+underscores): premium = gross before fees, fees = commission+GST, net profit = premium - fees (i.e., profit less fees = net profit, gross/premium = net profit + fees).
 
 User Query: "{query}"
 Plan Summary: {plan_summary}
-{"Chart generated: Yes — include '📊 Chart: <title>' line at end" if has_chart else "Chart generated: No"}
+{"Chart generated: Yes — include a final line 'Chart:' followed by the chart title as plain text" if has_chart else "Chart generated: No"}
 
 Evidence (sanitized tool outputs — use ONLY these numbers, never invent):
 {json.dumps(sanitized, indent=2, default=str)}
 
-Write a CLEAN, CONCISE response using EXACTLY this structure — omit empty sections:
+Write a CLEAN, CONCISE response for Telegram HTML mode. Use ONLY these HTML
+tags: <b>, <i>, <code>. No Markdown of any kind.
 
-**Summary:** 1-2 sentences directly answering the query with the headline number (total P&L, count, etc.). If query is about "profit less fees" / "net" / "premium", clarify the equivalence: net_profit = premium - fees.
+Use EXACTLY this structure — omit empty sections:
 
-**Key Metrics:**
-- up to 4 bullets — each with formatted $ and trade count where relevant (e.g. Total P&L (net): -$8,924.08 across 408 trades | Gross premium: $... | Fees: $...). For "profit less fees" queries, show net_profit as primary and optionally gross premium and fees from Evidence total_premium/total_fees for transparency.
+<b>Summary:</b> 1-2 sentences directly answering the query with the headline number (total P and L, count, etc.). If query is about "profit less fees" / "net" / "premium", clarify the equivalence in words: net profit = premium - fees.
 
-**Breakdown** — only if Evidence contains grouped aggregated rows (symbol/strategy/month). Use a markdown table, max 8 rows, sorted as in Evidence:
-| Group | P&L | Trades |
-|-------|-----|--------|
-| ... | $... | ... |
+<b>Key Metrics:</b>
+- up to 4 bullets — each with formatted $ and trade count where relevant (e.g. Total P and L (net): -$8,924.08 across 408 trades | Gross premium: $... | Fees: $...). For "profit less fees" queries, show net profit as primary and optionally gross premium and fees from Evidence total premium / total fees for transparency.
 
-**Takeaway:** 1 sentence insight (top performer, trend, or risk note). Omit if no insight.
+<b>Breakdown</b> — only if Evidence contains grouped aggregated rows (symbol/strategy/month). Use plain lines, max 8 rows, sorted as in Evidence, one per line like:
+SYM | $1,234.56 | 12 trades
+Do NOT use Markdown table header separators.
+
+<b>Takeaway:</b> 1 sentence insight (top performer, trend, or risk note). Omit if no insight.
 
 Rules:
 - Be factual: use ONLY numbers from Evidence. Never estimate.
 - Format numbers: $1,234.56, 12 trades. Percentages only if Evidence has them.
 - Keep total under 180 words. No preamble, no hedging, no raw JSON.
-- If chart was generated, add final line: 📊 Chart: <title>
+- Telegram HTML validity is critical: every <b>, <i>, <code> must have a matching closing tag. NEVER output **, __, *, backticks, #, [ ], ( ) links, or variable names with underscores (write "net profit", never "net_profit").
+- NEVER emit raw <, >, & except as part of the allowed <b>, <i>, <code> tags. Write "and" instead of "&". Never wrap titles in angle brackets — write the title as plain text.
+- If chart was generated, add final line with the chart emoji and plain title, e.g.: Chart title here (no brackets).
 - Professional, crisp tone. No emojis except the chart line.
 """
     try:
