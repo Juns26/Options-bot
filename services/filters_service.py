@@ -19,17 +19,32 @@ def filter_by_symbol(records: List[Dict[str, Any]], symbol: str) -> List[Dict[st
 
 def filter_by_strategy(records: List[Dict[str, Any]], strategy: str) -> List[Dict[str, Any]]:
     """
-    Filters a list of trade records by the 'strategy' field.
+    Filters a list of trade records by the 'strategy' field (inclusive).
 
     Args:
         records: Raw trade records (e.g. from get_all_trades()).
-        strategy:  Strategy value to keep. Case-insensitive. Typically 'BPS' or 'CSP'.
+        strategy:  Strategy value to keep. Case-insensitive. Typically 'BPS', 'CSP', 'Stk'.
 
     Returns:
         A filtered list of trade records matching the given strategy.
     """
     target = strategy.strip().lower()
     return [r for r in records if str(r.get("strategy", "")).strip().lower() == target]
+
+
+def filter_exclude_strategy(records: List[Dict[str, Any]], strategy: str) -> List[Dict[str, Any]]:
+    """
+    Excludes trade records by the 'strategy' field.
+
+    Args:
+        records: Raw trade records (e.g. from get_all_trades()).
+        strategy: Strategy value to exclude. Case-insensitive. Use "Stk" to exclude stock trades.
+
+    Returns:
+        A filtered list with matching strategy removed. E.g., filter_exclude_strategy(records, "Stk") removes all stock trades.
+    """
+    target = strategy.strip().lower()
+    return [r for r in records if str(r.get("strategy", "")).strip().lower() != target]
 
 def filter_by_status(records: List[Dict[str, Any]], status: str) -> List[Dict[str, Any]]:
     """

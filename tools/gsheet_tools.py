@@ -20,7 +20,8 @@ from services.filters_service import (
         filter_by_status,
         filter_by_date,
         filter_by_symbol,
-        filter_by_strategy)
+        filter_by_strategy,
+        filter_exclude_strategy)
 from services.aggregation_service import aggregate_trades as _aggregate_trades_service
 from services.plot_service import plot_trades as _plot_trades_service
 
@@ -29,6 +30,7 @@ def fetch_trades(
     status: Optional[str] = None,
     symbol: Optional[str] = None,
     strategy: Optional[str] = None,
+    exclude_strategy: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -40,6 +42,7 @@ def fetch_trades(
         status: Filter by status — 'Open' or 'Close' (case-insensitive). e.g., status="Open"
         symbol: Filter by ticker — 'META', 'AAPL', 'NVDA', etc. (case-insensitive). e.g., symbol="META"
         strategy: Filter by strategy — 'BPS', 'CSP', 'PMCC/CC/LEAPS' (case-insensitive). e.g., strategy="BPS"
+        exclude_strategy: Exclude by strategy — e.g., exclude_strategy="Stk" to exclude stock trades (value labelled "Stk" in sheet, case-insensitive). Use for "excluding stocks", "without stocks", "options only".
         start_date: Inclusive start date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS). e.g., "2025-01-01"
         end_date: Inclusive end date (YYYY-MM-DD). e.g., "2025-01-31"
 
@@ -48,8 +51,9 @@ def fetch_trades(
         fetch_trades(status="Open", symbol="META") -> all open META trades
         fetch_trades(symbol="AAPL", start_date="2025-01-01", end_date="2025-03-31") -> AAPL Q1 trades
         fetch_trades(status="Close", start_date="2025-01-01") -> closed trades YTD
+        fetch_trades(start_date="2026-01-01", end_date="2026-12-31", exclude_strategy="Stk") -> 2026 trades excluding stocks (options only)
 
-    Use this for any filtered fetch — it chains filter_by_status, filter_by_symbol, filter_by_date internally.
+    Use this for any filtered fetch — it chains filter_by_status, filter_by_symbol, filter_by_date, filter_by_strategy internally.
     """
     records = get_all_trades()
     if status:
@@ -60,6 +64,8 @@ def fetch_trades(
         records = filter_by_date(records, start_date=start_date, end_date=end_date)
     if strategy:
         records = filter_by_strategy(records, strategy)
+    if exclude_strategy:
+        records = filter_exclude_strategy(records, exclude_strategy)
     return records
 
 
