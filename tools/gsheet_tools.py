@@ -9,7 +9,7 @@ Services remain composable; tools chain them internally.
 To add a new tool:
   1. Add a function to services/
   2. Add a new @tool wrapper below that chains services
-  3. Import the new tool in agent.py and add it to ALL_TOOLS
+  3. Import the new tool in analyze_agent.py and add it to ALL_TOOLS
 """
 
 from typing import List, Dict, Any, Optional

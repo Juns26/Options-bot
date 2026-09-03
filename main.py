@@ -20,19 +20,22 @@ import numpy as np
 import asyncio
 import os
 
-# Agent integration (LangGraph) — optional, for natural language queries like "Profit in August 2026"
-try:
-    from agent import app as agent_app
-    AGENT_AVAILABLE = True
-except Exception as _e:
-    agent_app = None
-    AGENT_AVAILABLE = False
-    logger.warning(f"Agent not available: {_e}")
-
-# Configure logging
+# Configure logging (must be before analyze_agent import so warning can use logger)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Analyze Agent integration (LangGraph) — optional, for natural language queries like "Profit in August 2026"
+try:
+    from analyze_agent import app as analyze_agent_app
+    ANALYZE_AGENT_AVAILABLE = True
+except Exception as _e:
+    analyze_agent_app = None
+    ANALYZE_AGENT_AVAILABLE = False
+    logger.warning(f"Analyze agent not available: {_e}")
+
+# Backward compat alias
+AGENT_AVAILABLE = ANALYZE_AGENT_AVAILABLE
 
 # Conversation states
 VIEW_PERFORMANCE, SELECT_MONTH, CONFIRM_TARGET, SELECT_CUSTOM_RANGE = range(4)
@@ -1049,9 +1052,9 @@ async def get_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(f"❌ Error fetching positions: {str(e)}")
 
 async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fallback handler — forwards any natural language to the LangGraph agent (fetch/aggregate/plot)."""
-    if not AGENT_AVAILABLE or not agent_app:
-        await update.message.reply_text("🤖 Agent not configured. Set GEMINI_API_KEY in .env")
+    """Fallback handler — forwards any natural language to the LangGraph analyze_agent (fetch/aggregate/plot)."""
+    if not ANALYZE_AGENT_AVAILABLE or not analyze_agent_app:
+        await update.message.reply_text("🤖 Analyze agent not configured. Set GEMINI_API_KEY in .env")
         return
     text = (update.message.text or "").strip()
     if not text or text.startswith("/"):
@@ -1073,7 +1076,7 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
             "final_response": "",
             "verbose": False,
         }
-        final_state = await asyncio.to_thread(agent_app.invoke, initial_state)
+        final_state = await asyncio.to_thread(analyze_agent_app.invoke, initial_state)
         execution_results = final_state.get("execution_results", [])
         final_response = final_state.get("final_response", "No response.")
         for r in execution_results:
@@ -1096,12 +1099,12 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
                         pass
         await update.message.reply_text(final_response, parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as e:
-        logger.error(f"Agent error: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Agent error: {str(e)[:1000]}")
+        logger.error(f"Analyze agent error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Analyze agent error: {str(e)[:1000]}")
 
 
 async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Parked agent endpoint: /analyze <your question> — open to all users.
+    """Parked analyze_agent endpoint: /analyze <your question> — open to all users.
 
     Example: /analyze Profit in August 2026 and plot pie by strategy
     Restricted: other endpoints (/refresh, /performance, /get_position, /set_target) remain admin-only.
@@ -1116,8 +1119,8 @@ async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "• /analyze What is my YTD profit?"
         )
         return
-    if not AGENT_AVAILABLE or not agent_app:
-        await update.message.reply_text("🤖 Agent not configured. Set GEMINI_API_KEY in .env")
+    if not ANALYZE_AGENT_AVAILABLE or not analyze_agent_app:
+        await update.message.reply_text("🤖 Analyze agent not configured. Set GEMINI_API_KEY in .env")
         return
     await update.message.reply_text("🤖 Thinking...")
     try:
@@ -1133,7 +1136,7 @@ async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "final_response": "",
             "verbose": False,
         }
-        final_state = await asyncio.to_thread(agent_app.invoke, initial_state)
+        final_state = await asyncio.to_thread(analyze_agent_app.invoke, initial_state)
         execution_results = final_state.get("execution_results", [])
         final_response = final_state.get("final_response", "No response.")
         for r in execution_results:
@@ -1151,8 +1154,8 @@ async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     logger.warning(f"Failed to render plot image: {e}")
         await update.message.reply_text(final_response, parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as e:
-        logger.error(f"Agent error via /analyze: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Agent error: {str(e)[:1000]}")
+        logger.error(f"Analyze agent error via /analyze: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Analyze agent error: {str(e)[:1000]}")
 
 
 from aiohttp import web
@@ -1206,12 +1209,12 @@ async def main():
     )
     application.add_handler(performance_conv_handler)
 
-    # Parked agent endpoint: /analyze <question> — open to all users
+    # Parked analyze_agent endpoint: /analyze <question> — open to all users
     # Example: /analyze Profit in August 2026 and plot pie by strategy
     application.add_handler(CommandHandler("analyze", handle_analyze))
 
     # Fallback natural language is now disabled for non-admins.
-    # Only admin can still use free-text agent via handle_agent_message (optional).
+    # Only admin can still use free-text analyze_agent via handle_agent_message (optional).
     # Uncomment to allow admin free-text:
     # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_agent_message))
 

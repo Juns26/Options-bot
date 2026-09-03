@@ -1,9 +1,9 @@
-# agent.py
+# analyze_agent.py
 """
 Plan-and-Execute Options Tracker Agent (LangGraph Architecture in Sandbox Mode)
 
 Architecture:
-  agent.py         → LangGraph StateGraph ONLY (nodes, routing, CLI, prompts)
+  analyze_agent.py → LangGraph StateGraph ONLY (nodes, routing, CLI, prompts)
   tools/           → Thin @tool wrappers (call services/)
   services/        → Raw data access (Google Sheets, caching, filters)
 
@@ -372,8 +372,77 @@ def executor_node(state: AgentState) -> Dict[str, Any]:
     return {"execution_results": execution_results}
 
 
+def _sanitize_results_for_prompt(execution_results: List[Dict[str, Any]], max_sample: int = 2, max_agg_rows: int = 15) -> List[Dict[str, Any]]:
+    """
+    Produce a compact, LLM-friendly view of execution_results.
+
+    - Raw trade lists (fetch_trades) → count + total_net_profit + sample rows, not full dump
+    - Aggregated lists → truncated to max_agg_rows
+    - Plot dicts → strip `figure`, keep chart_type/title/aggregated_data only
+    Prevents token blow-up and hallucinations from huge JSON payloads.
+    """
+    sanitized: List[Dict[str, Any]] = []
+    for r in execution_results:
+        entry: Dict[str, Any] = {
+            "step": r.get("step"),
+            "tool_name": r.get("tool_name"),
+            "purpose": r.get("purpose", ""),
+        }
+        res = r.get("result")
+        if isinstance(res, list):
+            if not res:
+                entry["result"] = []
+                entry["result_summary"] = {"type": "empty", "count": 0}
+            elif isinstance(res[0], dict) and "trade_time" in res[0] and "symbol" in res[0]:
+                # Raw trade records from fetch_trades — summarize, don't dump thousands of rows
+                try:
+                    total_pnl = sum(float(x.get("net_profit", 0) or 0) for x in res)
+                except Exception:
+                    total_pnl = 0.0
+                entry["result_summary"] = {
+                    "type": "trade_records",
+                    "count": len(res),
+                    "total_net_profit": round(total_pnl, 2),
+                    "sample_rows": res[:max_sample],
+                    "note": f"Full list has {len(res)} records — sample shows first {min(max_sample, len(res))} only. Use aggregated values for summary, not row-by-row math.",
+                }
+            else:
+                # Aggregated results — keep full but cap rows
+                if len(res) > max_agg_rows:
+                    entry["result"] = res[:max_agg_rows]
+                    entry["result_summary"] = {"type": "aggregated", "showing": max_agg_rows, "total_rows": len(res)}
+                else:
+                    entry["result"] = res
+        elif isinstance(res, dict):
+            if "figure" in res:
+                # Plot output — figure is huge, keep only metadata + aggregated_data
+                agg = res.get("aggregated_data", [])
+                if isinstance(agg, list) and len(agg) > max_agg_rows:
+                    agg = agg[:max_agg_rows]
+                entry["result"] = {
+                    "type": "plot",
+                    "chart_type": res.get("chart_type"),
+                    "title": res.get("title"),
+                    "aggregated_data": agg,
+                }
+            elif "error" in res:
+                entry["result"] = res
+            else:
+                entry["result"] = res
+        else:
+            entry["result"] = res
+        # Keep arguments summarized (avoid dumping full records again)
+        args = r.get("arguments", {})
+        if isinstance(args, dict) and "records" in args and isinstance(args["records"], list):
+            entry["arguments_summary"] = {k: (f"<{len(v)} records>" if k == "records" and isinstance(v, list) else v) for k, v in args.items()}
+        else:
+            entry["arguments"] = args
+        sanitized.append(entry)
+    return sanitized
+
+
 def synthesizer_node(state: AgentState) -> Dict[str, Any]:
-    """Node 4: Synthesizes final formatted response for user."""
+    """Node 4: Synthesizes clean, concise final response for user."""
     query = state["query"]
     plan_summary = state.get("plan_summary", "")
     reason = state.get("sandbox_reason", "")
@@ -383,22 +452,39 @@ def synthesizer_node(state: AgentState) -> Dict[str, Any]:
     if verbose:
         print("\n📊 Step 4 [LangGraph Node: Synthesizer]: Synthesizing presentation...")
 
+    sanitized = _sanitize_results_for_prompt(execution_results)
+    has_chart = any(isinstance(r.get("result"), dict) and "figure" in r.get("result", {}) for r in execution_results)
+
     prompt = f"""
-You are an expert Options Portfolio Intelligence Assistant.
+You are an expert Options Portfolio Intelligence Assistant. Answer concisely and cleanly.
+
 User Query: "{query}"
-
 Plan Summary: {plan_summary}
-Plan Context: {reason}
+{"Chart generated: Yes — include '📊 Chart: <title>' line at end" if has_chart else "Chart generated: No"}
 
-Tool Execution Outputs:
-{json.dumps(execution_results, indent=2, default=str)}
+Evidence (sanitized tool outputs — use ONLY these numbers, never invent):
+{json.dumps(sanitized, indent=2, default=str)}
 
-Instructions:
-1. Provide a direct, insightful, and clearly structured answer to the user's query.
-2. Format numbers nicely (e.g. `$1,234.56`, `78.5% win rate`).
-3. Use markdown tables, bullet points, and sections where appropriate for readability.
-4. Highlight notable takeaways, win/loss metrics, or top performers if applicable.
-5. Maintain professional financial tone.
+Write a CLEAN, CONCISE response using EXACTLY this structure — omit empty sections:
+
+**Summary:** 1-2 sentences directly answering the query with the headline number (total P&L, count, etc.)
+
+**Key Metrics:**
+- up to 4 bullets — each with formatted $ and trade count where relevant (e.g. Total P&L: $1,234.56 across 42 trades)
+
+**Breakdown** — only if Evidence contains grouped aggregated rows (symbol/strategy/month). Use a markdown table, max 8 rows, sorted as in Evidence:
+| Group | P&L | Trades |
+|-------|-----|--------|
+| ... | $... | ... |
+
+**Takeaway:** 1 sentence insight (top performer, trend, or risk note). Omit if no insight.
+
+Rules:
+- Be factual: use ONLY numbers from Evidence. Never estimate.
+- Format numbers: $1,234.56, 12 trades. Percentages only if Evidence has them.
+- Keep total under 180 words. No preamble, no hedging, no raw JSON.
+- If chart was generated, add final line: 📊 Chart: <title>
+- Professional, crisp tone. No emojis except the chart line.
 """
     try:
         response_text = call_gemini_with_retry(prompt, is_json=False, temperature=0.2)
@@ -468,12 +554,22 @@ def build_options_agent_graph():
 # Pre-compiled graph
 app = build_options_agent_graph()
 
+# --- New naming convention aliases (analyze_agent) ---
+build_options_analyze_agent_graph = build_options_agent_graph
+AnalyzeAgentState = AgentState
+analyze_agent_app = app
+
 
 # ==============================================================================
-# Main Agent Runner & CLI
+# Main Analyze Agent Runner & CLI
 # ==============================================================================
 
 def run_agent(query: str, verbose: bool = True) -> str:
+    """Main entry point to execute the LangGraph workflow (legacy alias)."""
+    return run_analyze_agent(query, verbose=verbose)
+
+
+def run_analyze_agent(query: str, verbose: bool = True) -> str:
     """Main entry point to execute the LangGraph workflow."""
     if not GEMINI_API_KEY:
         return "❌ Error: GEMINI_API_KEY is not set in environment or .env file."
@@ -496,9 +592,9 @@ def run_agent(query: str, verbose: bool = True) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Options Tracker LangGraph Agent (Sandbox Mode)")
-    parser.add_argument("query", nargs="*", default=[], help="The query to ask the agent.")
-    parser.add_argument("--query", "-q", dest="query_opt", default=None, help="The query to ask the agent.")
+    parser = argparse.ArgumentParser(description="Options Tracker LangGraph Analyze Agent (Sandbox Mode)")
+    parser.add_argument("query", nargs="*", default=[], help="The query to ask the analyze_agent.")
+    parser.add_argument("--query", "-q", dest="query_opt", default=None, help="The query to ask the analyze_agent.")
     parser.add_argument("--quiet", action="store_true", help="Suppress intermediate step logs.")
     args = parser.parse_args()
 
@@ -510,23 +606,23 @@ def main():
         user_query = None
 
     if user_query:
-        output = run_agent(user_query, verbose=not args.quiet)
+        output = run_analyze_agent(user_query, verbose=not args.quiet)
         print(output)
     else:
         print("\n========================================================")
-        print("🤖 Options Tracker LangGraph Agent (Sandbox Mode)")
+        print("🤖 Options Tracker LangGraph Analyze Agent (Sandbox Mode)")
         print("========================================================")
         print("Type your query or 'exit' / 'quit' to end.\n")
 
         while True:
             try:
-                query = input("\nOptions Agent > ").strip()
+                query = input("\nOptions Analyze Agent > ").strip()
                 if not query:
                     continue
                 if query.lower() in ["exit", "quit", "q"]:
                     print("Goodbye!")
                     break
-                output = run_agent(query, verbose=not args.quiet)
+                output = run_analyze_agent(query, verbose=not args.quiet)
                 print(output)
             except KeyboardInterrupt:
                 print("\nExiting...")
