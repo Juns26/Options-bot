@@ -241,6 +241,13 @@ You are the Planning Engine of an Options Portfolio Assistant operating in Sandb
 Available tools in your sandbox:
 {tools_prompt}
 
+Metric Semantics (use for correct tool mapping):
+- premium = gross cash flow before fees (SELL credit +, BUY debit -). Synonyms: gross premium, gross profit, profit before fees.
+- fees = commission + GST (always cost >=0)
+- net_profit = premium - fees (net P&L after fees). Synonyms: net profit, profit less fees, profit after fees, P&L net of fees, net P&L, "premium is net profit subtract fees" → net_profit.
+  Rule: "profit less fees" / "net" / "after fees" → metric="net_profit". "premium" / "gross" / "before fees" → metric="premium". "fees" alone → metric="fees".
+  Example: "total profit less fees in 2026" → fetch_trades(start_date="2026-01-01", end_date="2026-12-31") + aggregate_trades(metric="net_profit", agg="sum")
+
 Strict Sandbox Capabilities & Planning Rules:
 1. Tool Capability Boundaries: You must ONLY plan actions that match the EXACT schemas and capabilities of the registered tools above.
 2. No Manual LLM Filtering or Calculation: If a query asks for specific filtering (e.g. "Year to Date", "YTD", date ranges, specific tickers, strategy filtering, status filtering) or mathematical aggregations/summaries, and there is NO dedicated tool or parameter to perform that filter/calculation, you CANNOT fulfill the query. You MUST NOT fetch raw records and attempt to manually filter or calculate metrics across hundreds of rows yourself.
@@ -397,12 +404,17 @@ def _sanitize_results_for_prompt(execution_results: List[Dict[str, Any]], max_sa
                 # Raw trade records from fetch_trades — summarize, don't dump thousands of rows
                 try:
                     total_pnl = sum(float(x.get("net_profit", 0) or 0) for x in res)
+                    total_prem = sum(float(x.get("premium", 0) or 0) for x in res)
+                    total_fees = sum(float(x.get("fees", 0) or 0) for x in res)
                 except Exception:
-                    total_pnl = 0.0
+                    total_pnl = total_prem = total_fees = 0.0
                 entry["result_summary"] = {
                     "type": "trade_records",
                     "count": len(res),
                     "total_net_profit": round(total_pnl, 2),
+                    "total_premium": round(total_prem, 2),
+                    "total_fees": round(total_fees, 2),
+                    "check": "net_profit = premium - fees",
                     "sample_rows": res[:max_sample],
                     "note": f"Full list has {len(res)} records — sample shows first {min(max_sample, len(res))} only. Use aggregated values for summary, not row-by-row math.",
                 }
@@ -458,6 +470,8 @@ def synthesizer_node(state: AgentState) -> Dict[str, Any]:
     prompt = f"""
 You are an expert Options Portfolio Intelligence Assistant. Answer concisely and cleanly.
 
+Metric definitions: premium = gross before fees, fees = commission+GST, net_profit = premium - fees (i.e., profit less fees = net_profit, gross/premium = net_profit + fees).
+
 User Query: "{query}"
 Plan Summary: {plan_summary}
 {"Chart generated: Yes — include '📊 Chart: <title>' line at end" if has_chart else "Chart generated: No"}
@@ -467,10 +481,10 @@ Evidence (sanitized tool outputs — use ONLY these numbers, never invent):
 
 Write a CLEAN, CONCISE response using EXACTLY this structure — omit empty sections:
 
-**Summary:** 1-2 sentences directly answering the query with the headline number (total P&L, count, etc.)
+**Summary:** 1-2 sentences directly answering the query with the headline number (total P&L, count, etc.). If query is about "profit less fees" / "net" / "premium", clarify the equivalence: net_profit = premium - fees.
 
 **Key Metrics:**
-- up to 4 bullets — each with formatted $ and trade count where relevant (e.g. Total P&L: $1,234.56 across 42 trades)
+- up to 4 bullets — each with formatted $ and trade count where relevant (e.g. Total P&L (net): -$8,924.08 across 408 trades | Gross premium: $... | Fees: $...). For "profit less fees" queries, show net_profit as primary and optionally gross premium and fees from Evidence total_premium/total_fees for transparency.
 
 **Breakdown** — only if Evidence contains grouped aggregated rows (symbol/strategy/month). Use a markdown table, max 8 rows, sorted as in Evidence:
 | Group | P&L | Trades |

@@ -73,6 +73,13 @@ def aggregate_trades(
     """
     Aggregates trade records by the given group-by columns and metric.
 
+    Metric semantics (critical for correct mapping):
+    - premium: Gross cash flow before fees (SELL = +credit, BUY = -debit, x100). Synonyms: gross premium, gross profit, profit before fees.
+    - fees: Commission + GST (always >=0, cost).
+    - net_profit: Premium less fees (net_profit = premium - fees). Synonyms: net P&L, profit less fees, profit after fees, net profit after fees, P&L net of fees.
+      User phrase "profit less fees" or "premium is net profit subtract fees" means net_profit (not premium alone). If user says "premium", use premium; "net" or "less fees" → net_profit.
+    - collateral: Margin/collateral amount (for CSP/BPS).
+
     Args:
         records: Raw trade records (e.g. from fetch_trades()).
         group_by: List of columns to group by. None/[] = overall aggregate (single row).
@@ -101,6 +108,9 @@ def plot_trades(
 ) -> Dict[str, Any]:
     """
     Generates a Plotly chart from trade records.
+
+    Metric semantics: premium = gross before fees, fees = commission+GST, net_profit = premium - fees.
+    Use net_profit for "profit less fees / net P&L / after fees"; use premium for "gross / before fees".
 
     Args:
         records: Trade records (e.g. from fetch_trades()). Must be a list of dicts.
