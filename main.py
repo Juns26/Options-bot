@@ -282,17 +282,17 @@ async def generate_pie_chart(update: Update, strategy_data: dict, title: str) ->
     strategies = list(strategy_data.keys())
     profits = list(strategy_data.values())
     total = sum(profits)
-    # Plotly pie uses absolute values for slice size, keep signed value in hover
+    # Plotly pie uses absolute values for slice size, but labels show SIGNED $ value.
     abs_vals = [abs(p) for p in profits]
-    labels = [f"{s} ({'+' if p>=0 else '-'}${abs(p):,.2f})" for s, p in zip(strategies, profits)]
 
     fig = go.Figure(data=[go.Pie(
         labels=strategies,
         values=abs_vals,
         customdata=[[p] for p in profits],
         hovertemplate="%{label}<br>Net: $%{customdata[0]:,.2f}<br>%{percent}<extra></extra>",
-        text=[f"{s}<br>{p:+,.2f}" for s, p in zip(strategies, profits)],
-        textinfo="label+percent",
+        texttemplate="%{label}<br>$%{customdata[0]:,.2f}<br>%{percent}",
+        textposition="inside",
+        textfont=dict(size=12),
         marker=dict(colors=COLOR_SEQ[:len(strategies)]),
         hole=0.35,
     )])
@@ -668,14 +668,32 @@ async def generate_performance_chart(
     y_label = 'Annual Profit ($)' if chart_type == "Year-on-Year" else 'Monthly Profit ($)'
 
     fig = go.Figure()
-    # Bars side-by-side
-    fig.add_trace(go.Bar(x=periods_rev, y=profits_rev, name="Monthly Profit", marker_color="#7ED957", opacity=0.8))
-    fig.add_trace(go.Bar(x=periods_rev, y=profits_with_stk_rev, name="Monthly Profit (w/STK)", marker_color="#6EC1E4", opacity=0.8))
-    # Cumulative lines on secondary y
-    fig.add_trace(go.Scatter(x=periods_rev, y=cum, name="Cumulative Profit", yaxis="y2",
-                             mode="lines+markers", line=dict(color="#1B7A3D", dash="dash", width=2), marker=dict(symbol="circle", size=6)))
-    fig.add_trace(go.Scatter(x=periods_rev, y=cum_stk, name="Cumulative (w/STK)", yaxis="y2",
-                             mode="lines+markers", line=dict(color="#1E3A8A", dash="dash", width=2), marker=dict(symbol="square", size=6)))
+    # Bars side-by-side, each labelled with its $ value
+    fig.add_trace(go.Bar(
+        x=periods_rev, y=profits_rev, name="Monthly Profit", marker_color="#7ED957", opacity=0.8,
+        text=[f"${v:,.0f}" for v in profits_rev], textposition="outside", textfont=dict(size=10), cliponaxis=False,
+        hovertemplate="%{x}<br>Profit: $%{y:,.2f}<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=periods_rev, y=profits_with_stk_rev, name="Monthly Profit (w/STK)", marker_color="#6EC1E4", opacity=0.8,
+        text=[f"${v:,.0f}" for v in profits_with_stk_rev], textposition="outside", textfont=dict(size=10), cliponaxis=False,
+        hovertemplate="%{x}<br>Profit (w/STK): $%{y:,.2f}<extra></extra>",
+    ))
+    # Cumulative lines on secondary y, each point labelled with its $ value
+    fig.add_trace(go.Scatter(
+        x=periods_rev, y=cum, name="Cumulative Profit", yaxis="y2",
+        mode="lines+markers+text", text=[f"${v:,.0f}" for v in cum],
+        textposition="top center", textfont=dict(size=10, color="#1B7A3D"),
+        line=dict(color="#1B7A3D", dash="dash", width=2), marker=dict(symbol="circle", size=6),
+        hovertemplate="%{x}<br>Cumulative: $%{y:,.2f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=periods_rev, y=cum_stk, name="Cumulative (w/STK)", yaxis="y2",
+        mode="lines+markers+text", text=[f"${v:,.0f}" for v in cum_stk],
+        textposition="bottom center", textfont=dict(size=10, color="#1E3A8A"),
+        line=dict(color="#1E3A8A", dash="dash", width=2), marker=dict(symbol="square", size=6),
+        hovertemplate="%{x}<br>Cumulative (w/STK): $%{y:,.2f}<extra></extra>",
+    ))
 
     max_abs = max(max(abs(min(profits_rev)), abs(max(profits_rev))), max(abs(min(cum)), abs(max(cum)))) * 1.1
     fig.update_layout(

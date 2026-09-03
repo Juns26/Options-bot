@@ -37,6 +37,20 @@ VALID_AGGS = {"sum", "count", "mean", "avg", "min", "max", "median"}
 # Minimal, clean theme
 PLOTLY_TEMPLATE = "plotly_white"
 COLOR_SEQ = ["#636EFA", "#00CC96", "#EF553B", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
+MONEY_METRICS = {"net_profit", "premium", "fees", "collateral"}
+
+
+def _format_value(v: float, metric: str, agg: str) -> str:
+    """Human-readable value label: $1,234.56 for money, 12 for counts."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if agg.strip().lower() == "count":
+        return f"{f:,.0f}"
+    if metric in MONEY_METRICS:
+        return f"${f:,.2f}"
+    return f"{f:,.2f}"
 
 
 def _normalize_agg(agg: str) -> str:
@@ -130,17 +144,28 @@ def plot_trades(
 
     # --- build figure ---
     # For single-group pie/bar, x is group_by[0]; for multi-group, join keys
+    # Every trace gets a visible value label (not just hover) via texttemplate/text.
     if not group_by:
         # Single value -> indicator / bar with one value
         val = agg_data[0]["value"]
+        label = _format_value(val, metric, agg_norm)
         if chart_type == "pie":
             fig = px.pie(names=["Total"], values=[abs(val)], title=title, color_discrete_sequence=COLOR_SEQ)
-            fig.update_traces(textinfo="label+percent", hovertemplate="%{label}: %{value:.2f}")
+            fig.update_traces(
+                texttemplate=f"Total<br>{label}<br>%{{percent}}",
+                hovertemplate=f"Total: {label}<br>%{{percent}}<extra></extra>",
+                textposition="inside",
+            )
         elif chart_type == "line":
-            fig = go.Figure(go.Scatter(x=["Total"], y=[val], mode="lines+markers"))
+            fig = go.Figure(go.Scatter(
+                x=["Total"], y=[val], mode="lines+markers+text",
+                text=[label], textposition="top center", textfont=dict(size=12),
+                hovertemplate=f"Total: {label}<extra></extra>",
+            ))
             fig.update_layout(title=title, template=PLOTLY_TEMPLATE)
         else:  # bar / scatter
-            fig = px.bar(x=["Total"], y=[val], title=title, labels={"x": "Group", "y": f"{metric} ({agg_norm})"}, color_discrete_sequence=COLOR_SEQ)
+            fig = px.bar(x=["Total"], y=[val], title=title, labels={"x": "Group", "y": f"{metric} ({agg_norm})"}, color_discrete_sequence=COLOR_SEQ, text=[label])
+            fig.update_traces(textposition="outside", cliponaxis=False, textfont=dict(size=12), hovertemplate=f"Total: {label}<extra></extra>")
     else:
         # Prepare dataframe for Plotly
         import pandas as pd
@@ -155,7 +180,8 @@ def plot_trades(
         color_col = next((c for c in ["strategy", "symbol", "status"] if c in group_by), None)
 
         if chart_type == "pie":
-            # Pie uses absolute values for sizing but keeps sign in hover
+            # Pie uses absolute values for sizing but labels the SIGNED value.
+            # customdata[0] = signed value (numeric), customdata[1] = trade count.
             df["abs_value"] = df["value"].abs()
             fig = px.pie(
                 df, names="x", values="abs_value", title=title,
@@ -163,27 +189,45 @@ def plot_trades(
                 color_discrete_sequence=COLOR_SEQ,
                 hover_data={"value": True, "abs_value": False, "trade_count": True},
             )
-            fig.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>value=%{customdata[0]:.2f}<br>count=%{customdata[1]}")
+            if agg_norm == "count" or metric not in MONEY_METRICS:
+                fig.update_traces(
+                    texttemplate="%{label}<br>%{customdata[0]:,.0f}<br>%{percent}",
+                    hovertemplate="%{label}<br>value=%{customdata[0]:,.0f}<br>trades=%{customdata[1]}<br>%{percent}<extra></extra>",
+                    textposition="inside",
+                )
+            else:
+                fig.update_traces(
+                    texttemplate="%{label}<br>$%{customdata[0]:,.2f}<br>%{percent}",
+                    hovertemplate="%{label}<br>Net: $%{customdata[0]:,.2f}<br>Trades: %{customdata[1]}<br>%{percent}<extra></extra>",
+                    textposition="inside",
+                )
         elif chart_type == "bar":
+            df["label"] = df["value"].apply(lambda v: _format_value(v, metric, agg_norm))
             fig = px.bar(
-                df, x="x", y="value", color=color_col, title=title,
-                labels={"x": " | ".join(group_by), "value": f"{metric} ({agg_norm})", "trade_count": "Trades"},
+                df, x="x", y="value", color=color_col, title=title, text="label",
+                labels={"x": " | ".join(group_by), "value": f"{metric} ({agg_norm})", "trade_count": "Trades", "label": "Value"},
                 color_discrete_sequence=COLOR_SEQ, hover_data=["trade_count"],
             )
-            fig.update_layout(xaxis_tickangle=-20)
+            fig.update_traces(textposition="outside", cliponaxis=False, textfont=dict(size=11))
+            fig.update_layout(xaxis_tickangle=-20, uniformtext_minsize=9, uniformtext_mode="hide")
         elif chart_type == "line":
             df_sorted = df.sort_values("x") if "trade_time" in "".join(group_by) else df.sort_values("value", ascending=False)
+            df_sorted = df_sorted.copy()
+            df_sorted["label"] = df_sorted["value"].apply(lambda v: _format_value(v, metric, agg_norm))
             fig = px.line(
-                df_sorted, x="x", y="value", color=color_col, markers=True, title=title,
-                labels={"x": " | ".join(group_by), "value": f"{metric} ({agg_norm})"},
+                df_sorted, x="x", y="value", color=color_col, markers=True, title=title, text="label",
+                labels={"x": " | ".join(group_by), "value": f"{metric} ({agg_norm})", "label": "Value"},
                 color_discrete_sequence=COLOR_SEQ,
             )
+            fig.update_traces(mode="lines+markers+text", textposition="top center", textfont=dict(size=11), cliponaxis=False)
         else:  # scatter
+            df["label"] = df["value"].apply(lambda v: _format_value(v, metric, agg_norm))
             fig = px.scatter(
-                df, x="x", y="value", color=color_col, size="trade_count", title=title,
-                labels={"x": " | ".join(group_by), "value": f"{metric} ({agg_norm})"},
+                df, x="x", y="value", color=color_col, size="trade_count", title=title, text="label",
+                labels={"x": " | ".join(group_by), "value": f"{metric} ({agg_norm})", "label": "Value"},
                 color_discrete_sequence=COLOR_SEQ, hover_data=["trade_count"],
             )
+            fig.update_traces(mode="markers+text", textposition="top center", textfont=dict(size=11), cliponaxis=False)
 
     # Clean layout: no Matplotlib-style hardcoded sizes
     fig.update_layout(
