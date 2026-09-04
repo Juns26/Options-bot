@@ -33,7 +33,7 @@ from google.genai import types
 from langgraph.graph import StateGraph, START, END
 
 # Tools — thin wrappers that delegate to services/
-# Single filtered fetch tool (chains filter_by_status/symbol/date/strategy) + generic aggregation + plotly chart
+# Single filtered fetch tool (chains filter_by_status/symbol/date/strategy) + generic aggregation + matplotlib chart
 from tools.gsheet_tools import fetch_trades, aggregate_trades, plot_trades
 
 # ==============================================================================
@@ -385,7 +385,7 @@ def _sanitize_results_for_prompt(execution_results: List[Dict[str, Any]], max_sa
 
     - Raw trade lists (fetch_trades) → count + total_net_profit + sample rows, not full dump
     - Aggregated lists → truncated to max_agg_rows
-    - Plot dicts → strip `figure`, keep chart_type/title/aggregated_data only
+    - Chart dicts → keep chart_type/title/aggregated_data only (capped rows)
     Prevents token blow-up and hallucinations from huge JSON payloads.
     """
     sanitized: List[Dict[str, Any]] = []
@@ -426,13 +426,13 @@ def _sanitize_results_for_prompt(execution_results: List[Dict[str, Any]], max_sa
                 else:
                     entry["result"] = res
         elif isinstance(res, dict):
-            if "figure" in res:
-                # Plot output — figure is huge, keep only metadata + aggregated_data
+            if res.get("type") == "chart":
+                # Chart output — keep only metadata + aggregated_data (capped rows)
                 agg = res.get("aggregated_data", [])
                 if isinstance(agg, list) and len(agg) > max_agg_rows:
                     agg = agg[:max_agg_rows]
                 entry["result"] = {
-                    "type": "plot",
+                    "type": "chart",
                     "chart_type": res.get("chart_type"),
                     "title": res.get("title"),
                     "aggregated_data": agg,
@@ -465,7 +465,7 @@ def synthesizer_node(state: AgentState) -> Dict[str, Any]:
         print("\n📊 Step 4 [LangGraph Node: Synthesizer]: Synthesizing presentation...")
 
     sanitized = _sanitize_results_for_prompt(execution_results)
-    has_chart = any(isinstance(r.get("result"), dict) and "figure" in r.get("result", {}) for r in execution_results)
+    has_chart = any(isinstance(r.get("result"), dict) and r.get("result", {}).get("type") == "chart" for r in execution_results)
 
     prompt = f"""
 You are an expert Options Portfolio Intelligence Assistant. Answer concisely and cleanly.

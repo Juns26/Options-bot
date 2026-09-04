@@ -113,7 +113,7 @@ def plot_trades(
     title: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Generates a Plotly chart from trade records.
+    Generates chart data from trade records for Telegram PNG charts.
 
     Metric semantics: premium = gross before fees, fees = commission+GST, net_profit = premium - fees.
     Use net_profit for "profit less fees / net P&L / after fees"; use premium for "gross / before fees".
@@ -129,9 +129,9 @@ def plot_trades(
         title: Optional title. Auto-generated if None.
 
     Returns:
-        Plotly figure dict (JSON serializable). Render via:
-            import plotly.graph_objects as go; go.Figure(fig).write_html("chart.html")
-            go.Figure(fig).write_image("chart.png")  # needs kaleido
+        Chart dict (JSON serializable) with aggregated_data + chart_type +
+        title. The bot renders it to PNG via
+        services.plot_service.render_chart_png (matplotlib, no Chrome needed).
 
     Examples:
         plot_trades(records, "pie", ["strategy"], "net_profit", "sum")

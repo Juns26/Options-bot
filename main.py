@@ -10,14 +10,13 @@ import re
 from gspread_formatting import *
 from decouple import config
 import io, os
-import plotly.graph_objects as go
-import plotly.express as px 
+# Chart PNGs come from services.plot_service (matplotlib, headless) so they
+# render on Render without Chrome (Plotly/kaleido needs Chrome).
+from services.plot_service import pie_chart_png, trend_chart_png, render_chart_png
 
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.quote.quote_client import QuoteClient
 from tigeropen.trade.trade_client import TradeClient
-
-import numpy as np
 
 import asyncio
 import os
@@ -262,53 +261,6 @@ def delta_indicator(current: float, base: float) -> str:
     else:
         return " ■ $0"
 
-async def generate_pie_chart(update: Update, strategy_data: dict, title: str) -> io.BytesIO:
-    """Generate performance pie chart with Plotly (clean, no matplotlib)."""
-    COLOR_SEQ = ["#636EFA", "#00CC96", "#EF553B", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
-
-    # --- empty ---
-    if not strategy_data or sum(strategy_data.values()) == 0:
-        fig = go.Figure()
-        fig.add_annotation(text="No MTD performance data found<br><span style='color:gray'>Trades will appear here once recorded</span>",
-                           x=0.5, y=0.55, showarrow=False, font=dict(size=18))
-        fig.update_layout(title=dict(text=f"{title}<br><span style='font-size:12px'>Net Total: $0.00</span>", x=0.5, xanchor="center"),
-                          template="plotly_white", margin=dict(l=20, r=20, t=80, b=20))
-        fig.update_xaxes(visible=False); fig.update_yaxes(visible=False)
-        buf = io.BytesIO()
-        buf.write(fig.to_image(format="png", scale=2))
-        buf.seek(0)
-        return buf
-
-    strategies = list(strategy_data.keys())
-    profits = list(strategy_data.values())
-    total = sum(profits)
-    # Plotly pie uses absolute values for slice size, but labels show SIGNED $ value.
-    abs_vals = [abs(p) for p in profits]
-
-    fig = go.Figure(data=[go.Pie(
-        labels=strategies,
-        values=abs_vals,
-        customdata=[[p] for p in profits],
-        hovertemplate="%{label}<br>Net: $%{customdata[0]:,.2f}<br>%{percent}<extra></extra>",
-        texttemplate="%{label}<br>$%{customdata[0]:,.2f}<br>%{percent}",
-        textposition="inside",
-        textfont=dict(size=12),
-        marker=dict(colors=COLOR_SEQ[:len(strategies)]),
-        hole=0.35,
-    )])
-    fig.update_layout(
-        title=dict(text=f"{title}<br><span style='font-size:13px'>Net Total: ${total:,.2f}</span>", x=0.5, xanchor="center", font=dict(size=18)),
-        template="plotly_white",
-        margin=dict(l=20, r=20, t=80, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
-        height=500, width=700,
-    )
-    buf = io.BytesIO()
-    buf.write(fig.to_image(format="png", scale=2))
-    buf.seek(0)
-    return buf
-
-
 async def show_mtd_performance(update: Update, spreadsheet) -> None:
     """Show month-to-date performance"""
     sheet = spreadsheet.worksheet('Tiger Trade API Summary')
@@ -328,11 +280,7 @@ async def show_mtd_performance(update: Update, spreadsheet) -> None:
     mtd_performance = []
 
     if clean_total ==0:
-        chart_buffer = await generate_pie_chart(
-            update,
-            strategy_data={},          # empty → placeholder plot
-            title=title_label
-        )
+        chart_buffer = pie_chart_png({}, title_label)  # empty → placeholder plot
 
         await update.message.reply_text(
             "No MTD performance data found.",
@@ -374,11 +322,7 @@ async def show_mtd_performance(update: Update, spreadsheet) -> None:
     performance_text = "\n".join(mtd_performance)
 
     # Generate chart
-    chart_buffer = await generate_pie_chart(
-        update,
-        strategy_data=strategy_data,
-        title = title_label
-    )
+    chart_buffer = pie_chart_png(strategy_data, title_label)
 
     await update.message.reply_text(
         f"📊 *{title_label}*\n\n"
@@ -415,11 +359,7 @@ async def show_ytd_performance(update: Update, spreadsheet) -> None:
     ytd_performance = []
 
     if clean_total == 0:
-        chart_buffer = await generate_pie_chart(
-            update,
-            strategy_data={},          # empty → placeholder plot
-            title=title_label
-        )
+        chart_buffer = pie_chart_png({}, title_label)  # empty → placeholder plot
 
         await update.message.reply_text(
             "No YTD performance data found.",
@@ -461,11 +401,7 @@ async def show_ytd_performance(update: Update, spreadsheet) -> None:
     performance_text = "\n".join(ytd_performance)
 
     # Generate chart
-    chart_buffer = await generate_pie_chart(
-        update,
-        strategy_data=strategy_data,
-        title=title_label
-    )
+    chart_buffer = pie_chart_png(strategy_data, title_label)
 
     await update.message.reply_text(
         f"📊 *{title_label}*\n\n"
@@ -642,77 +578,6 @@ async def generate_performance_table(
     
     return table
 
-async def generate_performance_chart(
-    periods: list, 
-    profits: list, 
-    profits_with_stk: list, 
-    chart_type: str = "Month-over-Month"
-) -> io.BytesIO:
-    """Generate performance trend chart with Plotly (bars + cumulative lines, clean)."""
-    if not periods or not profits or not profits_with_stk:
-        fig = go.Figure()
-        fig.add_annotation(text="No data available", x=0.5, y=0.5, showarrow=False, font=dict(size=14))
-        fig.update_layout(title=dict(text=f"{chart_type} Performance Trend", x=0.5, xanchor="center"), template="plotly_white", height=400)
-        fig.update_xaxes(visible=False); fig.update_yaxes(visible=False)
-        buf = io.BytesIO()
-        buf.write(fig.to_image(format="png", scale=2))
-        buf.seek(0)
-        return buf
-
-    # Reverse to chronological (oldest -> newest)
-    periods_rev = periods[::-1]
-    profits_rev = profits[::-1]
-    profits_with_stk_rev = profits_with_stk[::-1]
-    cum = np.cumsum(profits_rev)
-    cum_stk = np.cumsum(profits_with_stk_rev)
-    y_label = 'Annual Profit ($)' if chart_type == "Year-on-Year" else 'Monthly Profit ($)'
-
-    fig = go.Figure()
-    # Bars side-by-side, each labelled with its $ value
-    fig.add_trace(go.Bar(
-        x=periods_rev, y=profits_rev, name="Monthly Profit", marker_color="#7ED957", opacity=0.8,
-        text=[f"${v:,.0f}" for v in profits_rev], textposition="outside", textfont=dict(size=10), cliponaxis=False,
-        hovertemplate="%{x}<br>Profit: $%{y:,.2f}<extra></extra>",
-    ))
-    fig.add_trace(go.Bar(
-        x=periods_rev, y=profits_with_stk_rev, name="Monthly Profit (w/STK)", marker_color="#6EC1E4", opacity=0.8,
-        text=[f"${v:,.0f}" for v in profits_with_stk_rev], textposition="outside", textfont=dict(size=10), cliponaxis=False,
-        hovertemplate="%{x}<br>Profit (w/STK): $%{y:,.2f}<extra></extra>",
-    ))
-    # Cumulative lines on secondary y, each point labelled with its $ value
-    fig.add_trace(go.Scatter(
-        x=periods_rev, y=cum, name="Cumulative Profit", yaxis="y2",
-        mode="lines+markers+text", text=[f"${v:,.0f}" for v in cum],
-        textposition="top center", textfont=dict(size=10, color="#1B7A3D"),
-        line=dict(color="#1B7A3D", dash="dash", width=2), marker=dict(symbol="circle", size=6),
-        hovertemplate="%{x}<br>Cumulative: $%{y:,.2f}<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=periods_rev, y=cum_stk, name="Cumulative (w/STK)", yaxis="y2",
-        mode="lines+markers+text", text=[f"${v:,.0f}" for v in cum_stk],
-        textposition="bottom center", textfont=dict(size=10, color="#1E3A8A"),
-        line=dict(color="#1E3A8A", dash="dash", width=2), marker=dict(symbol="square", size=6),
-        hovertemplate="%{x}<br>Cumulative (w/STK): $%{y:,.2f}<extra></extra>",
-    ))
-
-    max_abs = max(max(abs(min(profits_rev)), abs(max(profits_rev))), max(abs(min(cum)), abs(max(cum)))) * 1.1
-    fig.update_layout(
-        title=dict(text=f"{chart_type} Performance Trend", x=0.5, xanchor="center", font=dict(size=16)),
-        xaxis=dict(title="Period", tickangle=0),
-        yaxis=dict(title=y_label, zeroline=True, zerolinecolor="black", zerolinewidth=1, range=[-max_abs, max_abs]),
-        yaxis2=dict(title="", overlaying="y", side="right", showgrid=False, zeroline=False, range=[-max_abs, max_abs]),
-        barmode="group",
-        template="plotly_white",
-        height=500, width=1100,
-        margin=dict(l=50, r=50, t=60, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
-        hovermode="x unified",
-    )
-    buf = io.BytesIO()
-    buf.write(fig.to_image(format="png", scale=2))
-    buf.seek(0)
-    return buf
-
 async def show_custom_performance(update: Update, spreadsheet, months: int) -> None:
     """Show custom range performance"""
     sheet = spreadsheet.worksheet('Tiger Trade API Summary')
@@ -783,7 +648,7 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
     )
 
     # 2. Create and send M-o-M chart with both profit types
-    chart_buffer = await generate_performance_chart(periods, profits, profits_with_stk, f"{months}-Month")
+    chart_buffer = trend_chart_png(periods, profits, profits_with_stk, f"{months}-Month")
 
     caption = f"📈 {months}-Month Performance Trend\n"
     caption += f"Total Profit: ${sum(profits):,.0f}\n"
@@ -852,7 +717,7 @@ async def show_year_on_year_performance(update: Update, spreadsheet) -> None:
     )
     
     # Generate and send chart
-    chart_buffer = await generate_performance_chart(years, profits, profits_with_stk, "Year-on-Year")
+    chart_buffer = trend_chart_png(years, profits, profits_with_stk, "Year-on-Year")
     
     caption = f"📊 {len(years)}-Year Performance Trend\n"
     caption += f"Total Profit: ${sum(profits):,.0f}\n"
@@ -1199,22 +1064,13 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
         final_response = final_state.get("final_response", "No response.")
         for r in execution_results:
             res = r.get("result")
-            if isinstance(res, dict) and "figure" in res:
+            if isinstance(res, dict) and res.get("type") == "chart":
                 try:
-                    import plotly.graph_objects as go
-                    fig = go.Figure(res["figure"])
-                    buf = io.BytesIO()
-                    buf.write(fig.to_image(format="png", scale=2))
-                    buf.seek(0)
+                    buf = render_chart_png(res)
                     caption = res.get("title") or "Chart"
                     await update.message.reply_photo(photo=buf, caption=f"📊 {caption}")
                 except Exception as e:
                     logger.warning(f"Failed to render plot image: {e}")
-                    try:
-                        html_str = go.Figure(res["figure"]).to_html(full_html=False)
-                        await update.message.reply_text(html_str[:3500], disable_web_page_preview=True)
-                    except Exception:
-                        pass
         await _reply_html_safe(update.message, final_response)
     except Exception as e:
         logger.error(f"Analyze agent error: {e}", exc_info=True)
@@ -1259,13 +1115,9 @@ async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         final_response = final_state.get("final_response", "No response.")
         for r in execution_results:
             res = r.get("result")
-            if isinstance(res, dict) and "figure" in res:
+            if isinstance(res, dict) and res.get("type") == "chart":
                 try:
-                    import plotly.graph_objects as go
-                    fig = go.Figure(res["figure"])
-                    buf = io.BytesIO()
-                    buf.write(fig.to_image(format="png", scale=2))
-                    buf.seek(0)
+                    buf = render_chart_png(res)
                     caption = res.get("title") or "Chart"
                     await update.message.reply_photo(photo=buf, caption=f"📊 {caption}")
                 except Exception as e:
