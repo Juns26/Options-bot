@@ -37,8 +37,8 @@ load_dotenv()
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-# Keep in sync with analyze_agent.py FALLBACK_MODELS.
-FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-flash-lite-latest"]
+# Rolling aliases to avoid pinned-version deprecation. Keep in sync with analyze_agent.py.
+FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"]
 
 
 def _time_range_for_days(days: int) -> str:

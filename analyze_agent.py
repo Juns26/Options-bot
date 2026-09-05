@@ -42,8 +42,8 @@ from tools.gsheet_tools import fetch_trades, aggregate_trades, plot_trades
 
 load_dotenv()
 
-# Keep in sync with sandbox/news_agent.py FALLBACK_MODELS.
-FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-flash-lite-latest"]
+# Rolling aliases to avoid pinned-version deprecation. Keep in sync with sandbox/news_agent.py.
+FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"]
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # All registered tools in the sandbox — keep it minimal: 1 fetch + 1 aggregation + 1 plot
