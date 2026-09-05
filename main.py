@@ -4,12 +4,15 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, ConversationHandler, filters, ContextTypes
 )
 from google.oauth2.service_account import Credentials
-import os, gspread, logging
+import os
+import gspread
+import logging
 import html
 import re
+import io
+import asyncio
 from gspread_formatting import *
 from decouple import config
-import io, os
 # Chart PNGs come from services.plot_service (matplotlib, headless) so they
 # render on Render without Chrome (Plotly/kaleido needs Chrome).
 from services.plot_service import pie_chart_png, trend_chart_png, render_chart_png
@@ -17,9 +20,6 @@ from services.plot_service import pie_chart_png, trend_chart_png, render_chart_p
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.quote.quote_client import QuoteClient
 from tigeropen.trade.trade_client import TradeClient
-
-import asyncio
-import os
 
 # Configure logging (must be before analyze_agent import so warning can use logger)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -85,31 +85,48 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive'          # Access to Google Drive
 ]
 
-# Telegram user ID for authorized access
-TELEGRAM_USER_ID = int(config("TELEGRAM_USER_ID"))
+# Telegram user ID for authorized access (default 0 = no admin until configured)
+try:
+    TELEGRAM_USER_ID = int(config("TELEGRAM_USER_ID", default="0"))
+except (ValueError, TypeError):
+    TELEGRAM_USER_ID = 0
+    logger.warning("TELEGRAM_USER_ID invalid or missing — admin commands disabled.")
 # Telegram bot token
-TOKEN = config("TELEGRAM_BOT_TOKEN")
+TOKEN = config("TELEGRAM_BOT_TOKEN", default="")
 
 # Replace with your Google Sheet's name
-SPREADSHEET_NAME = 'Options Tracker'
+SPREADSHEET_NAME = os.getenv("GOOGLE_SHEETS_SPREADSHEET_NAME", "Options Tracker")
+SUMMARY_WORKSHEET = "Tiger Trade API Data"  # placeholder, kept for clarity
+SUMMARY_SHEET = "Tiger Trade API Summary"
+
+# Summary-sheet cell layout (single source of truth for magic addresses)
+MTD_TITLE_CELL = "AA4"
+MTD_TOTAL_CELL = "AB5"
+MTD_TARGET_CELL = "AC5"
+MTD_PREV_TOTAL_CELL = "AD5"
+YTD_TITLE_CELL = "AF4"
+YTD_TOTAL_CELL = "AG5"
+YTD_TARGET_CELL = "AH5"
+YTD_PREV_TOTAL_CELL = "AI5"
+CUSTOM_MONTHS_CELL = "AB14"
+CUSTOM_TARGET_CELL = "AB15"
+CUSTOM_TABLE_RANGE = "AD16:AG27"
+YOY_TABLE_RANGE = "AD32:AH36"
+STOCK_POSITIONS_RANGE = "AL6:AP25"
+OPTIONS_POSITIONS_RANGE = "AL29:AV61"
 
 def is_admin(user_id: int) -> bool:
     return user_id == TELEGRAM_USER_ID
 
 # Initialize Google Sheets connection
 def init_google_sheets():
-    """Initialize Google Sheets connection"""
-    SCOPES = [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-    ]
-    
+    """Initialize Google Sheets connection (reuses module-level SCOPES)."""
     creds = Credentials.from_service_account_info(
         {
             "type": "service_account",
             "project_id": os.getenv("GOOGLE_PROJECT_ID"),
-            "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"), 
-            "private_key": os.getenv("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),
+            "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"),
+            "private_key": (os.getenv("GOOGLE_PRIVATE_KEY") or "").replace('\\n', '\n'),
             "client_email": os.getenv("GOOGLE_CLIENT_EMAIL"),
             "client_id": os.getenv('GOOGLE_CLIENT_ID'),
             "auth_uri": os.getenv('GOOGLE_AUTH_URI'),
@@ -263,12 +280,12 @@ def delta_indicator(current: float, base: float) -> str:
 
 async def show_mtd_performance(update: Update, spreadsheet) -> None:
     """Show month-to-date performance"""
-    sheet = spreadsheet.worksheet('Tiger Trade API Summary')
+    sheet = spreadsheet.worksheet(SUMMARY_SHEET)
 
-    title_label = sheet.acell('AA4').value
-    total_value = sheet.acell('AB5').value
-    target_value = sheet.acell('AC5').value
-    prev_total_value = sheet.acell('AD5').value
+    title_label = sheet.acell(MTD_TITLE_CELL).value
+    total_value = sheet.acell(MTD_TOTAL_CELL).value
+    target_value = sheet.acell(MTD_TARGET_CELL).value
+    prev_total_value = sheet.acell(MTD_PREV_TOTAL_CELL).value
 
     # Clean summary values
     clean_total = parse_money(total_value)
@@ -342,12 +359,12 @@ async def show_mtd_performance(update: Update, spreadsheet) -> None:
 
 async def show_ytd_performance(update: Update, spreadsheet) -> None:
     """Show year-to-date performance"""
-    sheet = spreadsheet.worksheet('Tiger Trade API Summary')
+    sheet = spreadsheet.worksheet(SUMMARY_SHEET)
 
-    title_label = sheet.acell('AF4').value  # Should be "{YTD YY} Performance"
-    total_value = sheet.acell('AG5').value  # Total YTD value
-    target_value = sheet.acell('AH5').value  # YTD target value
-    prev_total_value = sheet.acell('AI5').value  # Previous YTD total value
+    title_label = sheet.acell(YTD_TITLE_CELL).value  # Should be "{YTD YY} Performance"
+    total_value = sheet.acell(YTD_TOTAL_CELL).value  # Total YTD value
+    target_value = sheet.acell(YTD_TARGET_CELL).value  # YTD target value
+    prev_total_value = sheet.acell(YTD_PREV_TOTAL_CELL).value  # Previous YTD total value
 
     # Clean summary values
     clean_total = parse_money(total_value)
@@ -580,23 +597,22 @@ async def generate_performance_table(
 
 async def show_custom_performance(update: Update, spreadsheet, months: int) -> None:
     """Show custom range performance"""
-    sheet = spreadsheet.worksheet('Tiger Trade API Summary')
-    
-    # Update cell AB14 with selected months
+    sheet = spreadsheet.worksheet(SUMMARY_SHEET)
+
+    # Update custom-period cell, then allow Sheets formulas to recalculate
     try:
-        sheet.update([[months]],'AB14')
+        sheet.update([[months]], CUSTOM_MONTHS_CELL)
         await update.message.reply_text(f"✅ Updated Gsheet custom period to {months} months")
-        
-        # Wait a moment for Google Sheets to recalculate
-        import time
-        time.sleep(2)
-        
+
+        # Non-blocking wait for Google Sheets to recalculate
+        await asyncio.sleep(2)
+
     except Exception as e:
-        logger.error(f"Error updating cell AB14: {e}")
+        logger.error(f"Error updating cell {CUSTOM_MONTHS_CELL}: {e}")
         await update.message.reply_text(f"⚠️ Could not update cell: {str(e)}")
-    
-    # Read data from cells AD15:AG27 (Period, Profit, Profit with STK, Target)
-    data_range = sheet.get('AD16:AG27')
+
+    # Read data (Period, Profit, Profit with STK, Target)
+    data_range = sheet.get(CUSTOM_TABLE_RANGE)
     
     if not data_range:
         await update.message.reply_text(
@@ -661,11 +677,11 @@ async def show_custom_performance(update: Update, spreadsheet, months: int) -> N
 
 async def show_year_on_year_performance(update: Update, spreadsheet) -> None:
     """Show year-on-year performance for 5 years"""
-    sheet = spreadsheet.worksheet('Tiger Trade API Summary')
-    
-    # Assuming AD32:AH36 contains:
-    # AD: Year labels, AE: Profit, AF: Profit with STK, AG: Target, AH: Previous Year
-    year_data = sheet.get('AD32:AH36')
+    sheet = spreadsheet.worksheet(SUMMARY_SHEET)
+
+    # YOY_TABLE_RANGE columns:
+    # Year labels, Profit, Profit with STK, Target, Previous Year
+    year_data = sheet.get(YOY_TABLE_RANGE)
     
     if not year_data or len(year_data) < 5:
         await update.message.reply_text(
@@ -761,10 +777,10 @@ async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         
         # Get the spreadsheet
         spreadsheet = init_google_sheets()
-        sheet = spreadsheet.worksheet('Tiger Trade API Summary')
-        
-        # Update cell AB15 with the target value
-        sheet.update([[float_value]], 'AB15')
+        sheet = spreadsheet.worksheet(SUMMARY_SHEET)
+
+        # Update target cell with the target value
+        sheet.update([[float_value]], CUSTOM_TARGET_CELL)
         
         # Format the display value
         if float_value.is_integer():
@@ -776,7 +792,7 @@ async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"✅ Target updated to {display_value}"
         )
         
-        logger.info(f"Target updated in AB15: {display_value}")
+        logger.info(f"Target updated in {CUSTOM_TARGET_CELL}: {display_value}")
         
     except Exception as e:
         logger.error(f"Error setting target: {e}")
@@ -793,13 +809,13 @@ async def get_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     try:
         spreadsheet = init_google_sheets()
-        sheet = spreadsheet.worksheet('Tiger Trade API Summary')
-        
-        # 1. Get Stock Positions (AL6:AP25)
-        stock_positions_data = sheet.get('AL6:AP25')
-        
-        # 2. Get Options Positions (AL29:AV61)
-        options_positions_data = sheet.get('AL29:AV61')
+        sheet = spreadsheet.worksheet(SUMMARY_SHEET)
+
+        # 1. Get Stock Positions
+        stock_positions_data = sheet.get(STOCK_POSITIONS_RANGE)
+
+        # 2. Get Options Positions
+        options_positions_data = sheet.get(OPTIONS_POSITIONS_RANGE)
         
         # Parse stock positions
         stock_positions = []
@@ -1034,69 +1050,12 @@ async def _reply_html_safe(message, text: str) -> None:
             raise
 
 
-async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fallback handler — forwards any natural language to the LangGraph analyze_agent (fetch/aggregate/plot)."""
+async def _run_analyze_query_and_reply(message, query: str, log_prefix: str = "Analyze agent") -> None:
+    """Shared runner for /analyze and free-text queries: invoke LangGraph graph, send charts + HTML-safe reply."""
     if not ANALYZE_AGENT_AVAILABLE or not analyze_agent_app:
-        await update.message.reply_text("🤖 Analyze agent not configured. Set GEMINI_API_KEY in .env")
+        await message.reply_text("🤖 Analyze agent not configured. Set GEMINI_API_KEY in .env")
         return
-    text = (update.message.text or "").strip()
-    if not text or text.startswith("/"):
-        return
-    # Ignore exact keyboard texts handled by ConversationHandler (they are caught there first)
-    if text in ["📅 Month-to-date", "📈 Year-to-date", "📊 Custom Range", "📅 Year-on-Year", "❌ Cancel"]:
-        return
-    await update.message.reply_text("🤖 Thinking...")
-    try:
-        initial_state = {
-            "query": text,
-            "is_relevant": True,
-            "guardrail_reason": "",
-            "can_fulfill": True,
-            "sandbox_reason": "",
-            "plan_summary": "",
-            "steps": [],
-            "execution_results": [],
-            "final_response": "",
-            "verbose": False,
-        }
-        final_state = await asyncio.to_thread(analyze_agent_app.invoke, initial_state)
-        execution_results = final_state.get("execution_results", [])
-        final_response = final_state.get("final_response", "No response.")
-        for r in execution_results:
-            res = r.get("result")
-            if isinstance(res, dict) and res.get("type") == "chart":
-                try:
-                    buf = render_chart_png(res)
-                    caption = res.get("title") or "Chart"
-                    await update.message.reply_photo(photo=buf, caption=f"📊 {caption}")
-                except Exception as e:
-                    logger.warning(f"Failed to render plot image: {e}")
-        await _reply_html_safe(update.message, final_response)
-    except Exception as e:
-        logger.error(f"Analyze agent error: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Analyze agent error: {str(e)[:1000]}")
-
-
-async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Parked analyze_agent endpoint: /analyze <your question> — open to all users.
-
-    Example: /analyze Profit in August 2026 and plot pie by strategy
-    Restricted: other endpoints (/refresh, /performance, /get_position, /set_target) remain admin-only.
-    """
-    query = " ".join(context.args) if context.args else ""
-    if not query:
-        await update.message.reply_text(
-            "Usage: /analyze <question>\n"
-            "Examples:\n"
-            "• /analyze Profit in August 2026\n"
-            "• /analyze Profit by strategy in August 2026 and plot pie\n"
-            "• /analyze What is my YTD profit?"
-        )
-        return
-    if not ANALYZE_AGENT_AVAILABLE or not analyze_agent_app:
-        await update.message.reply_text("🤖 Analyze agent not configured. Set GEMINI_API_KEY in .env")
-        return
-    await update.message.reply_text("🤖 Thinking...")
+    await message.reply_text("🤖 Thinking...")
     try:
         initial_state = {
             "query": query,
@@ -1119,13 +1078,43 @@ async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 try:
                     buf = render_chart_png(res)
                     caption = res.get("title") or "Chart"
-                    await update.message.reply_photo(photo=buf, caption=f"📊 {caption}")
+                    await message.reply_photo(photo=buf, caption=f"📊 {caption}")
                 except Exception as e:
                     logger.warning(f"Failed to render plot image: {e}")
-        await _reply_html_safe(update.message, final_response)
+        await _reply_html_safe(message, final_response)
     except Exception as e:
-        logger.error(f"Analyze agent error via /analyze: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Analyze agent error: {str(e)[:1000]}")
+        logger.error(f"{log_prefix} error: {e}", exc_info=True)
+        await message.reply_text(f"❌ Analyze agent error: {str(e)[:1000]}")
+
+
+async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fallback handler — forwards any natural language to the LangGraph analyze_agent (fetch/aggregate/plot)."""
+    text = (update.message.text or "").strip()
+    if not text or text.startswith("/"):
+        return
+    # Ignore exact keyboard texts handled by ConversationHandler (they are caught there first)
+    if text in ["📅 Month-to-date", "📈 Year-to-date", "📊 Custom Range", "📅 Year-on-Year", "❌ Cancel"]:
+        return
+    await _run_analyze_query_and_reply(update.message, text, log_prefix="Analyze agent")
+
+
+async def handle_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Parked analyze_agent endpoint: /analyze <your question> — open to all users.
+
+    Example: /analyze Profit in August 2026 and plot pie by strategy
+    Restricted: other endpoints (/refresh, /performance, /get_position, /set_target) remain admin-only.
+    """
+    query = " ".join(context.args) if context.args else ""
+    if not query:
+        await update.message.reply_text(
+            "Usage: /analyze <question>\n"
+            "Examples:\n"
+            "• /analyze Profit in August 2026\n"
+            "• /analyze Profit by strategy in August 2026 and plot pie\n"
+            "• /analyze What is my YTD profit?"
+        )
+        return
+    await _run_analyze_query_and_reply(update.message, query, log_prefix="Analyze agent via /analyze")
 
 
 from aiohttp import web
@@ -1149,6 +1138,8 @@ async def main():
     
     logger.info(f"✅ Health endpoint active at :{port}/health")
 
+    if not TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is missing — set it in .env before starting the bot.")
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))

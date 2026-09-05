@@ -1,4 +1,5 @@
-# fetch_trade.py
+# fetch_trades.py — TigerOpen sync into Google Sheets ledger.
+import logging
 import math
 import os
 from datetime import datetime, timedelta
@@ -9,6 +10,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
+
 # TigerOpen imports
 try:
     from tigeropen.tiger_open_config import TigerOpenClientConfig
@@ -17,7 +20,7 @@ try:
     TIGER_AVAILABLE = True
 except ImportError:
     TIGER_AVAILABLE = False
-    print("Warning: TigerOpen modules not available. Trade fetching disabled.")
+    logger.warning("TigerOpen modules not available. Trade fetching disabled.")
 
 from zoneinfo import ZoneInfo
 
@@ -30,15 +33,15 @@ SCOPES = [
 ]
 
 def init_google_sheets():
-    """Initialize Google Sheets connection"""
+    """Initialize Google Sheets connection (same credentials as main.py / services)."""
     load_dotenv()
-    
+
     creds = Credentials.from_service_account_info(
         {
             "type": "service_account",
             "project_id": os.getenv("GOOGLE_PROJECT_ID"),
-            "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"), 
-            "private_key": os.getenv("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),
+            "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"),
+            "private_key": (os.getenv("GOOGLE_PRIVATE_KEY") or "").replace('\\n', '\n'),
             "client_email": os.getenv("GOOGLE_CLIENT_EMAIL"),
             "client_id": os.getenv('GOOGLE_CLIENT_ID'),
             "auth_uri": os.getenv('GOOGLE_AUTH_URI'),
@@ -441,15 +444,17 @@ def main():
     load_dotenv()
 
     def get_client_config():
-        """
-        https://quant.itigerup.com/#developer Get developer information
-        """
+        """TigerOpen config — supports legacy `client_config.*` and `TIGER_*` env names (same as main.py)."""
         client_config = TigerOpenClientConfig()
-        client_config.private_key = os.getenv("client_config.private_key")
-        client_config.tiger_id = os.getenv("client_config.tiger_id")
-        client_config.account = os.getenv("client_config.account")
-        client_config.license = os.getenv("client_config.license")
-
+        raw_key = (
+            os.getenv("client_config.private_key")
+            or os.getenv("TIGER_PRIVATE_KEY")
+            or ""
+        ).strip().strip('"').strip("'").replace("\\n", "\n")
+        client_config.private_key = raw_key
+        client_config.tiger_id = os.getenv("client_config.tiger_id") or os.getenv("TIGER_ID") or ""
+        client_config.account = os.getenv("client_config.account") or os.getenv("TIGER_ACCOUNT") or ""
+        client_config.license = os.getenv("client_config.license") or os.getenv("TIGER_LICENSE") or ""
         return client_config
 
     client_config = get_client_config()

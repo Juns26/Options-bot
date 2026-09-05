@@ -1,7 +1,7 @@
-# reconciliation.py
+# recouncile.py — read-only reconcile helper (filename kept for backward compat).
 """
 Fetch trades for an arbitrary date range and run them through the same
-data transformation as fetch_trade.py, WITHOUT touching Google Sheets at all
+data transformation as fetch_trades.py, WITHOUT touching Google Sheets at all
 (no reading last_update, no writing back new rows or timestamps).
 
 Useful for reconciling a specific period against your broker statement,
@@ -9,8 +9,8 @@ spot-checking historical trades, or re-deriving a range you already have
 in the sheet.
 
 Usage:
-    python reconciliation.py --start 2025-01-01 --end 2025-01-31
-    python reconciliation.py --start 2025-01-01 --end 2025-01-31 --csv out.csv
+    python recouncile.py --start 2025-01-01 --end 2025-01-31
+    python recouncile.py --start 2025-01-01 --end 2025-01-31 --csv out.csv
 
 Or import and call fetch_trades_for_period() directly from another script.
 """
@@ -35,13 +35,18 @@ SGT = ZoneInfo("Asia/Singapore")
 
 
 def get_client_config():
-    """Same TigerOpen client config loading as fetch_trade.py's main()."""
+    """Same TigerOpen config as main.py / fetch_trades.py (legacy + TIGER_* names)."""
     load_dotenv()
     client_config = TigerOpenClientConfig()
-    client_config.private_key = os.getenv("TIGER_PRIVATE_KEY")
-    client_config.tiger_id = os.getenv("TIGER_ID")
-    client_config.account = os.getenv("TIGER_ACCOUNT")
-    client_config.license = os.getenv("TIGER_LICENSE")
+    raw_key = (
+        os.getenv("client_config.private_key")
+        or os.getenv("TIGER_PRIVATE_KEY")
+        or ""
+    ).strip().strip('"').strip("'").replace("\\n", "\n")
+    client_config.private_key = raw_key
+    client_config.tiger_id = os.getenv("client_config.tiger_id") or os.getenv("TIGER_ID") or ""
+    client_config.account = os.getenv("client_config.account") or os.getenv("TIGER_ACCOUNT") or ""
+    client_config.license = os.getenv("client_config.license") or os.getenv("TIGER_LICENSE") or ""
     return client_config
 
 

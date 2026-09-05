@@ -42,7 +42,8 @@ from tools.gsheet_tools import fetch_trades, aggregate_trades, plot_trades
 
 load_dotenv()
 
-FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-lite-latest"]
+# Keep in sync with sandbox/news_agent.py FALLBACK_MODELS.
+FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-flash-lite-latest"]
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # All registered tools in the sandbox — keep it minimal: 1 fetch + 1 aggregation + 1 plot
@@ -519,22 +520,26 @@ Rules:
 
 
 def refusal_node(state: AgentState) -> Dict[str, Any]:
-    """Fallback node when query is off-topic or outside sandbox."""
+    """Fallback node when query is off-topic or outside sandbox.
+
+    NOTE: output must be Telegram HTML-safe (<b>/<i> only) because
+    main.py sends final_response with parse_mode="HTML".
+    """
     if not state.get("is_relevant", True):
         msg = (
-            f"🚫 **Query Not Relevant to Options Tracker**\n\n"
+            f"<b>Query not relevant to ThetaPilot</b>\n\n"
             f"{state.get('guardrail_reason', '')}\n\n"
-            f"💡 *I am specialized in tracking and analyzing your options trading portfolio, "
-            f"historical performance, P&L, strategies (CSP, BPS, Covered Calls, Spreads), "
-            f"and ticker analytics from your Google Sheet records.*"
+            f"<i>I track and analyze your options trading portfolio, "
+            f"historical performance, P and L, strategies (CSP, BPS, Covered Calls, Spreads), "
+            f"and ticker analytics from your Google Sheet records.</i>"
         )
     else:
         msg = (
-            f"⚠️ **Cannot Fulfill Request in Sandbox Mode**\n\n"
+            f"<b>Cannot fulfill request in sandbox mode</b>\n\n"
             f"{state.get('sandbox_reason', '')}\n\n"
-            f"💡 *Currently in Sandbox Mode, I have read-only access to your Google Sheet trade data "
+            f"<i>Currently in sandbox mode, I have read-only access to your Google Sheet trade data "
             f"and analytical tools. Actions such as executing live broker orders, deleting rows, "
-            f"or modifying broker settings are not supported.*"
+            f"or modifying broker settings are not supported.</i>"
         )
     return {"final_response": msg}
 
