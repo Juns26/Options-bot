@@ -1,89 +1,135 @@
-# Options Trading Tracker Bot
+# ThetaPilot — Agentic Options Portfolio Analyst
 
-A comprehensive Telegram Bot designed to track options and stock trading activities on Tiger Brokers. The bot acts as a convenient interface to fetch your trades, calculate PnL, maintain a Google Sheets ledger, and visualize your portfolio's performance directly in Telegram.
+Telegram bot that tracks Tiger Brokers options/stock trades in Google Sheets, with a LangGraph `analyze_agent` for natural-language P&L queries and charts. (Formerly: Options Tracker.)
 
-## 🌟 Features
+## Features
 
-- **Automated Trade Sync**: Fetches the latest options and stock orders directly from your Tiger Brokers account via the TigerOpen API.
-- **Performance Visualization**: Generates insightful pie charts and bar charts for your performance, showing your PnL breakdown across different strategies.
-- **Flexible Timeframes**: View performance metrics Month-to-Date (MTD), Year-to-Date (YTD), Year-on-Year (YoY), or across custom date ranges.
-- **Position Tracking**: Get real-time summaries of your open stock and option positions, including total value, floating PnL, and collateral used.
-- **Goal Setting**: Set monthly profit targets and track your achievement percentage.
-- **Admin Security**: Restricts critical commands (like fetching new trades and setting targets) to the authorized Telegram User ID.
+- **Trade sync**: pulls filled TigerOpen orders, parses single/multi-leg options, computes premium/fees/net, classifies strategy (CSP, BPS, PMCC/CC/LEAPS, Stk), appends to Sheets.
+- **`/analyze` agent**: ask `Profit in August 2026 and plot pie by strategy` — plans tool calls, aggregates, renders PNG, replies in Telegram-safe HTML. Open to all users.
+- **Classic views (admin)**: MTD / YTD / YoY / Custom performance tables + pie/trend PNGs, positions, monthly targets.
+- **Headless charts**: matplotlib `Agg` backend — no Chrome needed on Render/Docker.
 
-## 🛠️ Prerequisites
+## Architecture
 
-1. **Python 3.8+**
-2. **Tiger Brokers Developer config**: You need developer access enabled on your Tiger Brokers account to get the license, account ID, and private key.
-3. **Google Cloud Service Account**: 
-   - Enable the **Google Sheets API** and **Google Drive API**.
-   - Create a Service Account and download the JSON credentials.
-   - Create a Google Sheet named `Options Tracker` (with sheets `Tiger Trade API Summary` and `Tiger Trade API Data`) and share it with the service account email.
-4. **Telegram Bot Token**: Created via BotFather on Telegram.
+### System overview
 
-## ⚙️ Environment Structure
+```mermaid
+flowchart LR
+    TG["Telegram user"] -->|"commands (/analyze, /performance, ...)"| MAIN["main.py<br/>routing, admin guards, HTML-safe replies"]
+    MAIN -->|"read summary ranges"| SHEETS[("Google Sheets<br/>Summary + Data")]
+    MAIN -->|"/refresh"| TIGER["fetch_trades.py<br/>TigerOpen chunked sync"]
+    TIGER -->|"append rows"| SHEETS
+    MAIN -->|"query string"| AGENT["analyze_agent<br/>LangGraph plan-and-execute"]
+    AGENT -->|"fetch / aggregate / plot"| SHEETS
+    AGENT -->|"PNG dict"| MAIN
+```
 
-Create a `.env` file in the root directory and populate it with your credentials:
+### analyze_agent graph (LangGraph)
+
+```mermaid
+flowchart TD
+    START((START)) --> G["guardrail<br/>relevant? trades, P&L, strategies, tickers"]
+    G -- "yes" --> P["planner<br/>emit 1-3 tool steps as JSON"]
+    G -- "no" --> R["refusal<br/>HTML-safe fallback"]
+    P -- "can_fulfill = true" --> E["executor<br/>run steps, resolve $step_N"]
+    P -- "can_fulfill = false" --> R
+    E --> S["synthesizer<br/>evidence-only HTML, under 180 words"]
+    S --> END((END))
+    R --> END
+
+    subgraph TOOLS["tools/ (thin @tool wrappers)"]
+        T1["fetch_trades"]
+        T2["aggregate_trades"]
+        T3["plot_trades"]
+    end
+
+    subgraph SVC["services/ (pure logic, no LLM)"]
+        S1["gsheet_service"]
+        S2["filters_service"]
+        S3["aggregation_service"]
+        S4["plot_service"]
+    end
+
+    E -. "calls" .-> TOOLS
+    TOOLS -. "delegates to" .-> SVC
+```
+
+Graph: `START → guardrail → planner → executor → synthesizer → END` (off-topic or unfulfillable → `refusal`). Built in `build_options_agent_graph()` (`analyze_agent.py`).
+
+| Component | Purpose | Key exports |
+|---|---|---|
+| `main.py` | Bot routing, admin guards, HTML-safe replies, PNG sending | `handle_analyze`, `_run_analyze_query_and_reply`, `pie/trend_chart_png` via `services.plot_service` |
+| `analyze_agent.py` | Plan-and-execute LangGraph graph, sandbox guardrails, Gemini fallback | `guardrail/planner/executor/synthesizer/refusal` nodes, `run_analyze_agent` |
+| `tools/gsheet_tools.py` | Thin LangChain `@tool` wrappers (no data logic) | `fetch_trades`, `aggregate_trades`, `plot_trades` |
+| `services/gsheet_service.py` | Raw Sheets I/O + in-memory cache | `get_all_trades` |
+| `services/filters_service.py` | Pure filters chained by `fetch_trades` | `filter_by_status/symbol/date/strategy`, `filter_exclude_strategy` |
+| `services/aggregation_service.py` | Generic group-by (whitelisted cols/metrics) | `aggregate_trades` |
+| `services/plot_service.py` | Chart data + PNG renderers | `plot_trades`, `render_chart_png`, `pie/trend_chart_png` |
+| `fetch_trades.py` | Broker sync: chunked fetch → `build_trades_dataframe` → Sheets append | `fetch_and_update_trades`, `build_trades_dataframe` |
+| `recouncile.py` | Read-only reconcile for a date range, same transform, optional CSV | `fetch_trades_for_period` |
+| `sandbox/news_agent.py` | Experimental ticker news (Tavily + Gemini), standalone | `run_news_agent` |
+
+### analyze_agent in detail
+
+Graph: `START → guardrail → planner → executor → synthesizer → END` (off-topic or unfulfillable → `refusal`).
+
+- **guardrail**: relevance check (trades, P&L, strategies, tickers, expiries). Blocks everything else.
+- **planner**: emits 1–3 tool steps as JSON (`fetch_trades` → `aggregate_trades`/`plot_trades`). Enforces sandbox rules: only whitelisted params, no manual row math, no live broker actions.
+- **executor**: runs steps sequentially, resolves `$step_N` / `records=null` placeholders to prior outputs.
+- **synthesizer**: answers from sanitized evidence only (counts + totals + ≤15 agg rows, never full dumps). Output is Telegram HTML (`<b>/<i>/<code>`), ≤180 words: Summary → Key Metrics → Breakdown → Takeaway + chart title.
+- **Metric semantics**: `premium` = gross before fees, `fees` = commission+GST, `net_profit` = premium − fees. “Profit less fees / net / after fees” → `net_profit`; “gross / before fees” → `premium`.
+
+Example: `Profit less fees in 2026` → `fetch_trades(start_date="2026-01-01", end_date="2026-12-31")` + `aggregate_trades(metric="net_profit", agg="sum")`.
+
+To add a tool: 1) new function in `services/` 2) `@tool` wrapper in `tools/gsheet_tools.py` 3) add to `ALL_TOOLS` in `analyze_agent.py`.
+
+## Bot commands
+
+- `/analyze <question>` — open to all. e.g. `/analyze Profit by strategy in August 2026 and plot pie`
+- `/performance`, `/refresh`, `/get_position`, `/set_target <amount>` — admin only (`TELEGRAM_USER_ID`)
+- `/start`, `/help`
+
+## Prerequisites
+
+1. Python 3.10+, Tiger Brokers developer access, Telegram bot token via BotFather.
+2. Google service account with Sheets + Drive API; share sheet `Options Tracker` (tabs `Tiger Trade API Summary`, `Tiger Trade API Data`) with the service email.
+3. Gemini API key for the agent (`GEMINI_API_KEY`). Tavily key only for `sandbox/news_agent.py`.
 
 ```env
-# Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
-TELEGRAM_USER_ID=123456789  # Your personal Telegram User ID for admin access
-
-# Tiger Brokers API Configuration
-client_config.tiger_id="your_tiger_id"
-client_config.account="your_account_number"
-client_config.license="TBSG" # Or your corresponding license
-client_config.private_key="your_tiger_private_key"
-
-# Google Sheets Service Account Credentials
-GOOGLE_PROJECT_ID="your_project_id"
-GOOGLE_PRIVATE_KEY_ID="your_private_key_id"
+TELEGRAM_BOT_TOKEN="..."
+TELEGRAM_USER_ID=123456789
+GEMINI_API_KEY="..."
+# Tiger (legacy client_config.* or TIGER_* both work)
+TIGER_ID="..." 
+TIGER_ACCOUNT="..."
+TIGER_LICENSE="TBSG"
+TIGER_PRIVATE_KEY="..."
+# Google service account
+GOOGLE_PROJECT_ID="..."
 GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-GOOGLE_CLIENT_EMAIL="your_service_account_email"
-GOOGLE_CLIENT_ID="your_client_id"
+GOOGLE_CLIENT_EMAIL="..."
+GOOGLE_CLIENT_ID="..."
+GOOGLE_PRIVATE_KEY_ID="..."
 GOOGLE_AUTH_URI="https://accounts.google.com/o/oauth2/auth"
 GOOGLE_TOKEN_URI="https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_PROVIDER_X509_CERT_URL="https://www.googleapis.com/oauth2/v1/certs"
-GOOGLE_CLIENT_X509_CERT_URL="your_client_x509_url"
+GOOGLE_CLIENT_X509_CERT_URL="..."
 ```
 
-## 🚀 Installation & Setup
+## Run
 
-1. **Clone the repository** (if applicable) or download the files.
+```bash
+python -m venv venv
+# Windows: venv\Scripts\activate / Unix: source venv/bin/activate
+pip install -r requirements.txt
+python main.py          # bot + :10000/health (or $PORT) for Render
+python analyze_agent.py --query "Profit by strategy in August 2026 and plot pie"
+python recouncile.py --start 2025-01-01 --end 2025-01-31 --csv out.csv
+python sandbox/news_agent.py --ticker NVDA
+```
 
-2. **Set up a virtual environment** (recommended):
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+## Notes
 
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Run the bot**:
-   ```bash
-   python main.py
-   ```
-   *Note: The script also spins up a lightweight `aiohttp` web server on port 10000 (or the port defined in `$PORT`) to serve health checks, which is useful for platforms like Render.*
-
-## 📱 Bot Commands
-
-- `/start` - Displays the welcome message and available commands.
-- `/refresh` - Refreshes trade data from Tiger Broker and updates the Google Sheet (Admin only).
-- `/performance` - Opens an interactive menu to view performance metrics (MTD, YTD, YoY, Custom).
-- `/get_position` - Fetches and displays your current stock and option positions, total value, and collateral.
-- `/set_target <amount>` - Sets your monthly profit target (Admin only).
-- `/help` - Shows the help message outlining all features.
-
-## 🏗️ Architecture overview
-
-- **`main.py`**: The entry point for the Telegram bot, handling command routing, fetching summary data from Google Sheets, calculating deltas, creating matplotlib charts, and generating responses.
-- **`fetch_trades.py`**: Contains the core logic to query the TigerOpen API for recently filled trades, parse single/multi-leg options, compute trade cashflows, calculate required collaterals, classify the trading strategy (e.g., CSP, BPS, PMCC), and append new rows to the Google Sheet.
-- **Google Sheets (`Options Tracker`)**: Acts as the database. `main.py` fetches the aggregated data (from `Tiger Trade API Summary`) to render charts, avoiding heavy database setups.
-
-## ⚠️ Notes
-- Ensure your `matplotlib` is configured appropriately if deploying on a headless server. The application defaults to `Agg` backend (`matplotlib.use('Agg')`) which prevents GUI-related crashes.
-- To avoid Tiger API rate limits, `fetch_trades.py` pulls trade orders in chunks.
+- Sheets is the DB: summary tab feeds classic views; raw tab feeds the agent. Cell layout constants live at the top of `main.py`.
+- Tiger fetch is chunked (30d) with limit backoff to respect rate limits.
+- Agent replies are sanitized to Telegram HTML with plain-text fallback so one bad entity never drops a reply.
