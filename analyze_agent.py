@@ -17,6 +17,7 @@ import json
 import re
 import argparse
 import time
+from datetime import date, timedelta
 from typing import Dict, Any, List, TypedDict
 from dotenv import load_dotenv
 
@@ -52,6 +53,27 @@ TOOL_MAP = {t.name: t for t in ALL_TOOLS}
 
 # Regex for planner placeholders like "$step_1", "$step_1_result", "step_2.output" - any $step_N prefix
 _PLACEHOLDER_RE = re.compile(r"^\$?step[_-]?(\d+)", re.IGNORECASE)
+
+
+def _get_date_context(today: date | None = None) -> Dict[str, str]:
+    """Minimal current-date context so the planner can resolve relative dates.
+
+    Computed at call time (not import time) so long-running CLI sessions
+    stay correct across midnight. No new tools/nodes needed — just injected
+    into prompts.
+    """
+    today = today or date.today()
+    first_this_month = today.replace(day=1)
+    last_prev_month = first_this_month - timedelta(days=1)
+    first_prev_month = last_prev_month.replace(day=1)
+    return {
+        "today": today.isoformat(),
+        "yesterday": (today - timedelta(days=1)).isoformat(),
+        "start_this_month": first_this_month.isoformat(),
+        "start_prev_month": first_prev_month.isoformat(),
+        "end_prev_month": last_prev_month.isoformat(),
+        "start_this_year": f"{today.year}-01-01",
+    }
 
 
 def _resolve_arg(value: Any, execution_results: List[Dict[str, Any]]) -> Any:
@@ -236,11 +258,25 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         print("\n📋 Step 2 [LangGraph Node: Planner]: Generating tool plan & checking sandbox limits...")
 
     tools_prompt = get_tools_prompt()
+    date_ctx = _get_date_context()
+
+    if verbose:
+        print(f"   📅 Current date: {date_ctx['today']} (prev month {date_ctx['start_prev_month']} to {date_ctx['end_prev_month']})")
 
     prompt = f"""
 You are the Planning Engine of an Options Portfolio Assistant operating in Sandbox Mode.
 Available tools in your sandbox:
 {tools_prompt}
+
+Current date (local server date): {date_ctx['today']} (YYYY-MM-DD).
+Resolve every relative date against this anchor — never guess the year, never leave start_date/end_date empty when the query implies a period:
+- today → start_date=end_date="{date_ctx['today']}"
+- yesterday → start_date=end_date="{date_ctx['yesterday']}"
+- this month / month to date → start_date="{date_ctx['start_this_month']}", end_date="{date_ctx['today']}"
+- most recent month / last month / previous month → previous FULL calendar month: start_date="{date_ctx['start_prev_month']}", end_date="{date_ctx['end_prev_month']}"
+- YTD / year to date / this year → start_date="{date_ctx['start_this_year']}", end_date="{date_ctx['today']}"
+- Anchors (use verbatim): {json.dumps(date_ctx)}
+  Example: "most recent month P&L" with today 2026-09-22 → fetch_trades(start_date="2026-08-01", end_date="2026-08-31") + aggregate_trades(metric="net_profit", agg="sum")
 
 Metric Semantics (use for correct tool mapping):
 - premium = gross cash flow before fees (SELL credit +, BUY debit -). Synonyms: gross premium, gross profit, profit before fees.
@@ -467,9 +503,11 @@ def synthesizer_node(state: AgentState) -> Dict[str, Any]:
 
     sanitized = _sanitize_results_for_prompt(execution_results)
     has_chart = any(isinstance(r.get("result"), dict) and r.get("result", {}).get("type") == "chart" for r in execution_results)
+    today_str = _get_date_context()["today"]
 
     prompt = f"""
 You are an expert Options Portfolio Intelligence Assistant. Answer concisely and cleanly.
+Today is {today_str} (YYYY-MM-DD). Use it to label relative periods correctly (e.g. most recent month = previous full calendar month).
 
 Metric definitions (internal only — always display with spaces, never with
 underscores): premium = gross before fees, fees = commission+GST, net profit = premium - fees (i.e., profit less fees = net profit, gross/premium = net profit + fees).
