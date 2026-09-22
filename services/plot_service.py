@@ -115,6 +115,11 @@ def plot_trades(
 
     agg_data = aggregate_trades(records, group_by=group_by, metric=metric, agg=agg_norm)
 
+    # Defensive: keep time series chronological even if aggregation changes.
+    # Time keys (YYYY-MM, YYYY, YYYY-Www, YYYY-MM-DD) sort lexicographically.
+    if any(g.startswith("trade_time:") for g in group_by):
+        agg_data.sort(key=lambda r: tuple(str(r.get(g, "")) for g in group_by))
+
     # Default title
     if not title:
         g = ", ".join(group_by) if group_by else "Total"

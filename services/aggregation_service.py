@@ -76,7 +76,9 @@ def aggregate_trades(
         agg: Aggregation function. Valid: sum, count, mean/avg, min, max, median.
 
     Returns:
-        List of dicts sorted by aggregated value descending (for sum/count).
+        List of dicts sorted chronologically ascending for time buckets
+        (any group_by starting with "trade_time:"), otherwise by aggregated
+        value descending (for sum/count).
         Grouped: [{"symbol":"AAPL", "strategy":"CSP", "value":1234.56, "metric":"net_profit", "agg":"sum", "trade_count":5}, ...]
         Ungrouped: [{"value":1234.56, "metric":"net_profit", "agg":"sum", "trade_count":10}]
         Returns [] if records empty.
@@ -222,9 +224,14 @@ def aggregate_trades(
     # Round value
     result_df["value"] = result_df["value"].astype(float).round(2)
 
-    # Sort by value descending for sum/count, ascending for min? Keep desc for sum/count/mean
-    # For consistency, sort desc for sum/count, desc for others too (most profitable first)
-    result_df = result_df.sort_values(by="value", ascending=False)
+    # Sort: chronological asc for time buckets (YYYY-MM / YYYY / YYYY-Www /
+    # YYYY-MM-DD are lexicographically sortable), value desc for categorical
+    # leaderboards (symbol, strategy, etc.).
+    if any(g.startswith("trade_time:") for g in group_by):
+        result_df = result_df.sort_values(by=group_by, ascending=True)
+    else:
+        # For consistency, sort desc for sum/count, desc for others too (most profitable first)
+        result_df = result_df.sort_values(by="value", ascending=False)
 
     # Convert to list of dicts
     # Ensure group cols are strings and preserve original names
